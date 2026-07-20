@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
@@ -96,6 +96,59 @@ check('畑が中央帯に収まる',
   }
   check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
   makeField(G.stage);
+}
+
+// --- かけらを集めるとビームが強化される ---
+{
+  resetGame(false);
+  const p = G.players[0];
+  p.x = 400; p.y = Z.bot.y0 + 40;
+  const put = (power) => {                       // 機体の目の前にかけらを置く
+    G.chips.length = 0;
+    G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: !!power });
+    update(1/60);
+  };
+
+  check('最初のビームはLv1', p.beam === 0, `beam=${p.beam}`);
+
+  for (let i = 0; i < CHIPS_PER_POWER - 1; i++) put(false);
+  check(`かけら${CHIPS_PER_POWER - 1}個ではまだ強化されない`,
+        p.beam === 0 && !G.chips.some(c => c.power), `beam=${p.beam}`);
+
+  put(false);                                    // ちょうど規定数
+  check(`かけら${CHIPS_PER_POWER}個で強化アイテムが落ちてくる`,
+        G.chips.some(c => c.power), `chips=${JSON.stringify(G.chips.map(c => !!c.power))}`);
+  check('強化アイテムは拾った人の側へ落ちる',
+        G.chips.filter(c => c.power).every(c => c.side === 0));
+
+  put(true);                                     // 強化アイテムを受け止める
+  check('受け止めるとビームがLv2になる', p.beam === 1, `beam=${p.beam}`);
+
+  // 実際にビームが強くなっているか
+  const shoot = () => {
+    G.bullets.length = 0; p.charge = p.maxCharge; p.cool = 0; p.firing = false;
+    playerShoot(p);
+    return G.bullets[0];
+  };
+  const lv2 = shoot();
+  p.beam = 0;
+  const lv1 = shoot();
+  check('強化するとビームが太く・強く・貫通が増える',
+        lv2.r > lv1.r && lv2.dmg > lv1.dmg && lv2.pierceLeft > lv1.pierceLeft,
+        `Lv1(r${lv1.r} 威力${lv1.dmg} 貫通${lv1.pierceLeft}) -> Lv2(r${lv2.r} 威力${lv2.dmg} 貫通${lv2.pierceLeft})`);
+
+  // 上限
+  p.beam = BEAM_LEVELS.length - 1;
+  const before = p.beam;
+  p.caught = 0;
+  for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
+  check('最大まで強化したら強化アイテムは出ない',
+        !G.chips.some(c => c.power) && p.beam === before, `beam=${p.beam}`);
+
+  G.chips.length = 0;
+  resetGame(false);
+  check('やり直すとビームはLv1に戻る', G.players[0].beam === 0);
+  onDown(ev(1,400,1000)); onDown(ev(2,400,200));
 }
 
 // --- 10ステージごとのお祝い演出 ---

@@ -314,6 +314,14 @@ const SFX = {
   locked() {                                     // 色が違って弾かれた
     throttled('locked', 110, () => tone({ f:330, f2:250, type:'square', dur:0.09, vol:0.09 }));
   },
+  powerDrop() {                                  // 強化かけらが出た
+    [880, 1175].forEach((f, i) => tone({ f, type:'triangle', dur:0.2, vol:0.16, delay:i * 0.12 }));
+  },
+  powerup() {                                    // 強化かけらを取った
+    [523, 784, 1047, 1568].forEach((f, i) =>
+      tone({ f, type:'square', dur:0.3, vol:0.19, delay:i * 0.08 }));
+    noiseBurst({ f:5000, f2:800, dur:0.4, vol:0.14, filter:'highpass' });
+  },
   bugOut() { tone({ f:300, f2:520, type:'sawtooth', dur:0.18, vol:0.10 }); },
   bugHit() {
     noiseBurst({ f:1600, f2:300, dur:0.2, vol:0.2 });
@@ -380,6 +388,18 @@ function stageSetup(n) {
     bugEvery: Math.max(3.2, 7.5 - (n - 1) * 0.6) * (G.solo ? 1.5 : 1),
   };
 }
+
+/* ============================================================
+   ビームの強化
+   ◆かけらを一定数あつめると強化アイテムが落ちてくる。
+============================================================ */
+const CHIPS_PER_POWER = 5;          // 何個あつめたら強化アイテムが出るか
+const BEAM_LEVELS = [
+  { r: 20, dmg: 110, pierce: 3 },
+  { r: 25, dmg: 145, pierce: 4 },
+  { r: 30, dmg: 180, pierce: 5 },
+  { r: 36, dmg: 230, pierce: 7 },
+];
 
 /* ---------------- 自機のサイズと指との位置関係 ---------------- */
 const SHIP = {
@@ -452,6 +472,7 @@ function makePlayer(idx) {
     stun: 0,                             // おじゃまむしに触れると少しの間うごけない
     outside: false,                      // 指が画面の外にある間は停止する
     caught: 0,                           // 拾ったかけらの数
+    beam: 0,                             // ビームの強化段階（BEAM_LEVELS の添字）
     firing: false,
     pointer: -1,
     stack: [],                           // その側に触れている指（最初の1本が操作中）
@@ -916,10 +937,11 @@ function playerShoot(p) {
     p.charge = 0;
     // 強攻撃はまっすぐ1本に集中させる。
     // pierceLeft: 貫通できるブロック数。これが無いと列を丸ごと消してしまう。
+    const lv = BEAM_LEVELS[Math.min(p.beam, BEAM_LEVELS.length - 1)];
     G.bullets.push({
       x: p.x, y: muzzle, vx: 0, vy: p.dirY * 1500,
-      r: 20, dmg: 110, owner: p.idx,
-      pierce: true, pierceLeft: 3, color: c.main,
+      r: lv.r, dmg: lv.dmg, owner: p.idx,
+      pierce: true, pierceLeft: lv.pierce, color: c.main,
     });
     burst(p.x, muzzle, c.main, 18, 320, 6);
     SFX.beam();
@@ -1074,7 +1096,7 @@ function update(dt) {
   for (let i = G.chips.length - 1; i >= 0; i--) {
     const ch = G.chips[i];
     ch.t += dt;
-    ch.vy += (ch.side === 0 ? 1 : -1) * 170 * dt;    // だんだん加速して落ちる
+    ch.vy += (ch.side === 0 ? 1 : -1) * (ch.power ? 40 : 170) * dt;   // だんだん加速して落ちる
     ch.x += ch.vx * dt;
     ch.y += ch.vy * dt;
     if (ch.y < -30 || ch.y > H + 30) { G.chips.splice(i, 1); continue; }
@@ -1082,12 +1104,28 @@ function update(dt) {
     const p = G.players[ch.side];
     if (p) {
       const dx = ch.x - p.x, dy = ch.y - p.y;
-      if (dx * dx + dy * dy < 40 * 40) {            // 機体で受け止めた
-        p.charge = Math.min(p.maxCharge, p.charge + 25);
-        p.caught++;
-        G.score += 50;
-        SFX.chip();
-        burst(ch.x, ch.y, '#9cff8a', 12, 180, 4);
+      const catchR = ch.power ? 52 : 40;
+      if (dx * dx + dy * dy < catchR * catchR) {    // 機体で受け止めた
+        if (ch.power) {
+          if (p.beam < BEAM_LEVELS.length - 1) p.beam++;
+          p.charge = p.maxCharge;
+          G.score += 300;
+          SFX.powerup();
+          burst(ch.x, ch.y, P_COLORS[p.idx].main, 34, 380, 8);
+          burst(ch.x, ch.y, '#ffffff', 18, 260, 5);
+          G.shake = Math.max(G.shake, 12);
+          G.banner = { text: `ビーム きょうか！ Lv${p.beam + 1}`, life: 1.6 };
+        } else {
+          p.charge = Math.min(p.maxCharge, p.charge + 25);
+          p.caught++;
+          G.score += 50;
+          SFX.chip();
+          burst(ch.x, ch.y, '#9cff8a', 12, 180, 4);
+          // 一定数あつめるごとに、ビーム強化のかけらを落とす
+          if (p.caught % CHIPS_PER_POWER === 0 && p.beam < BEAM_LEVELS.length - 1) {
+            dropPowerChip(p.idx);
+          }
+        }
         G.chips.splice(i, 1);
       }
     }
@@ -1148,6 +1186,21 @@ function update(dt) {
   bgmUpdate();
 }
 
+
+// ビーム強化のかけら。ゆっくり落ちてくるので受け止めやすい
+function dropPowerChip(idx) {
+  if (!FIELD.cell) return;
+  const side = idx === 1 ? 1 : 0;
+  G.chips.push({
+    x: rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30),
+    y: side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0,
+    vx: rand(-25, 25),
+    vy: (side === 0 ? 1 : -1) * 60,
+    side, t: 0, power: true,
+  });
+  SFX.powerDrop();
+  G.banner = { text: 'ビームきょうかの かけらだ！', life: 1.4 };
+}
 
 function spawnBug() {
   if (!FIELD.cell) return;
@@ -1517,12 +1570,35 @@ function drawChips() {
   for (const ch of G.chips) {
     ctx.save();
     ctx.translate(ch.x, ch.y);
-    ctx.rotate(ch.t * 5);
-    ctx.shadowColor = '#9cff8a'; ctx.shadowBlur = 14;
-    ctx.fillStyle = '#9cff8a';
-    ctx.fillRect(-7, -7, 14, 14);
-    ctx.fillStyle = '#eaffe4';
-    ctx.fillRect(-3, -3, 6, 6);
+
+    if (ch.power) {                                  // ビーム強化のかけら
+      const col = P_COLORS[ch.side].main;
+      const pulse = 0.6 + 0.4 * Math.sin(ch.t * 8);
+      ctx.rotate(Math.sin(ch.t * 2) * 0.35);
+      ctx.scale(1, ch.side === 0 ? 1 : -1);          // 持ち主の側を向く
+
+      ctx.globalAlpha = 0.35 * pulse;                // 外側の輪
+      ctx.strokeStyle = col; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, 22 + pulse * 4, 0, TAU); ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      ctx.shadowColor = col; ctx.shadowBlur = 22 * pulse;
+      ctx.fillStyle = col;
+      ctx.beginPath();                               // 二重のシェブロン
+      for (const oy of [-5, 6]) {
+        ctx.moveTo(-13, 5 + oy); ctx.lineTo(0, -8 + oy); ctx.lineTo(13, 5 + oy);
+        ctx.lineTo(13, 10 + oy); ctx.lineTo(0, -3 + oy); ctx.lineTo(-13, 10 + oy);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.rotate(ch.t * 5);
+      ctx.shadowColor = '#9cff8a'; ctx.shadowBlur = 14;
+      ctx.fillStyle = '#9cff8a';
+      ctx.fillRect(-7, -7, 14, 14);
+      ctx.fillStyle = '#eaffe4';
+      ctx.fillRect(-3, -3, 6, 6);
+    }
     ctx.restore();
   }
   ctx.restore();
@@ -1768,7 +1844,12 @@ function drawPlayerHUD(p) {
 
   ctx.fillStyle = c.main;
   ctx.font = '700 12px system-ui, sans-serif';
-  ctx.fillText(`${c.name}   ★${p.stars}   ブロック ${p.dug}`, 0, -16);
+  const maxed = p.beam >= BEAM_LEVELS.length - 1;
+  const toNext = CHIPS_PER_POWER - (p.caught % CHIPS_PER_POWER);
+  ctx.fillText(
+    `${c.name}   ★${p.stars}   ビーム Lv${p.beam + 1}` +
+    (maxed ? '  MAX' : `   ◆あと${toNext}`),
+    0, -16);
   ctx.restore();
 }
 
