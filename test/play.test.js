@@ -295,15 +295,16 @@ check('畑が中央帯に収まる',
         dropped.length === 1 && Math.abs(dropped[0].x - 400) < 1, `x=${dropped[0] && dropped[0].x}`);
   check('かけらは倒した人の側へ落ちる', dropped.length === 1 && dropped[0].side === 0);
 
-  // 最大まで強化済みなら出ない
+  // 最大まで強化済みなら巨大レーザーの球が出る
   p.beam = BEAM_LEVELS.length - 1; p.shot = SHOT_LEVELS.length - 1;
   G.chips.length = 0; G.bugs.length = 0; G.bullets.length = 0;
   G.bugs.push({ x: 400, y: Z.bot.y0 - 60, vy: 0, r: 17, hp: 16, side: 0, t: 0, flash: 0 });
   G.bullets.push({ x: 400, y: Z.bot.y0 - 60, vx: 0, vy: -1, r: 5, dmg: 999,
                    owner: 0, pierce: false, color: '#fff' });
   update(1/60);
-  check('最大まで強化済みなら倒しても出ない',
-        G.chips.filter(c => c.power).length === 0, `かけら=${G.chips.length}`);
+  const bugOrb = G.chips.find(c => c.power);
+  check('最大まで強化済みなら倒すと巨大レーザーの球が出る',
+        bugOrb && bugOrb.kind === 'laser', `kind=${bugOrb && bugOrb.kind}`);
   p.beam = 0; p.shot = 0; G.chips.length = 0; G.bullets.length = 0;
 
   // --- ダメージを受けると1段階下がる ---
@@ -330,14 +331,35 @@ check('畑が中央帯に収まる',
   check('Lv1より下には下がらない', p.beam === 0, `beam=${p.beam}`);
   for (let i = 0; i < 60 * 4 && p.stun > 0; i++) update(1/60);
 
-  // 上限（両方とも最大なら出ない）
+  // 上限（両方とも最大なら巨大レーザーの球になる）
   p.beam = BEAM_LEVELS.length - 1;
   p.shot = SHOT_LEVELS.length - 1;
   p.stun = 0;
   p.caught = 0;
   for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
-  check('両方とも最大なら強化アイテムは出ない',
-        !G.chips.some(c => c.power), `chips=${G.chips.length}`);
+  const orb = G.chips.find(c => c.power);
+  check('両方とも最大なら巨大レーザーの球が出る', orb && orb.kind === 'laser',
+        `kind=${orb && orb.kind}`);
+
+  // 取った瞬間に前方のブロックがごっそり消える
+  makeField(3);
+  for (const b of FIELD.grid) if (b) { b.type = 0; b.hp = b.maxHp = 24; b.star = false; }
+  p.x = FIELD.x0 + FIELD.cols * FIELD.cell / 2;
+  p.y = Z.bot.y0 + 40;
+  const beforeAll = FIELD.grid.filter(Boolean).length;
+  G.lasers.length = 0;
+  put(true, 'laser');
+  const afterAll = FIELD.grid.filter(Boolean).length;
+  const wiped = beforeAll - afterAll;
+  check('球を取ると巨大レーザーが出る', G.lasers.length === 1, `lasers=${G.lasers.length}`);
+  check('前方のブロックが縦にまとめて消える', wiped >= FIELD.rows * 2,
+        `消えた数=${wiped} (${FIELD.rows}段)`);
+  check('畑全体は消えない', afterAll > 0, `残=${afterAll}`);
+  console.log(`  参考: 巨大レーザーで${wiped}個消滅（畑${beforeAll}個中）`);
+
+  // 残光は自動で片付く
+  for (let i = 0; i < 60; i++) update(1/60);
+  check('巨大レーザーの残光は消える', G.lasers.length === 0, `lasers=${G.lasers.length}`);
 
   // 片方だけ最大なら、伸びしろのある方が出る
   p.shot = 0; p.caught = 0;
