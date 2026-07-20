@@ -1154,6 +1154,19 @@ function update(dt) {
     ch.y += ch.vy * dt;
     if (ch.y < -30 || ch.y > H + 30) { G.chips.splice(i, 1); continue; }
 
+    if (ch.power) {                                 // 光の粒をこぼしながら落ちる
+      ch.trail = (ch.trail || 0) - dt;
+      if (ch.trail <= 0) {
+        ch.trail = 0.07;
+        const a = rand(0, TAU), d = rand(10, 26);
+        G.parts.push({
+          x: ch.x + Math.cos(a) * d, y: ch.y + Math.sin(a) * d,
+          vx: rand(-18, 18), vy: rand(-18, 18),
+          life: 0.5, max: 0.7, color: '#fff8d8', size: rand(2, 4),
+        });
+      }
+    }
+
     const p = G.players[ch.side];
     if (p) {
       const dx = ch.x - p.x, dy = ch.y - p.y;
@@ -1773,19 +1786,73 @@ function drawChips() {
     ctx.save();
     ctx.translate(ch.x, ch.y);
 
-    if (ch.power) {                                  // ビーム強化のかけら
+    if (ch.power) {                                  // 強化のかけら
       const col = P_COLORS[ch.side].main;
       const pulse = 0.6 + 0.4 * Math.sin(ch.t * 8);
+
+      // --- 後光 ---
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 54 + pulse * 8);
+      halo.addColorStop(0,    'rgba(255,255,255,0.55)');
+      halo.addColorStop(0.25, col);
+      halo.addColorStop(1,    'rgba(0,0,0,0)');
+      ctx.globalAlpha = 0.5 * pulse;
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(0, 0, 54 + pulse * 8, 0, TAU); ctx.fill();
+
+      // --- 放射状の光条（長短を交互に、ゆっくり回る） ---
+      ctx.globalAlpha = 0.42 * pulse;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineCap = 'round';
+      const rays = 12;
+      for (let i = 0; i < rays; i++) {
+        const a = ch.t * 0.7 + (i / rays) * TAU;
+        const len = i % 2 === 0 ? 46 + pulse * 10 : 30;
+        ctx.lineWidth = i % 2 === 0 ? 3 : 1.5;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 17, Math.sin(a) * 17);
+        ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
+        ctx.stroke();
+      }
+
+      // --- 逆回りの二重リング ---
+      ctx.globalAlpha = 0.5 * pulse;
+      ctx.strokeStyle = col;
+      for (const [rr, dir, wdt] of [[24, 1, 2.5], [31, -1, 1.5]]) {
+        ctx.save();
+        ctx.rotate(ch.t * 1.1 * dir);
+        ctx.lineWidth = wdt;
+        ctx.beginPath();
+        ctx.arc(0, 0, rr + pulse * 2, 0.15, TAU * 0.42);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, rr + pulse * 2, Math.PI + 0.15, Math.PI + TAU * 0.42);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // --- きらめき ---
+      ctx.globalAlpha = 0.9 * pulse;
+      ctx.strokeStyle = '#fff8d8';
+      ctx.lineWidth = 1.6;
+      for (let i = 0; i < 4; i++) {
+        const a = -ch.t * 1.6 + i * TAU / 4;
+        const sx = Math.cos(a) * 38, sy = Math.sin(a) * 38;
+        const k = 4 + 3 * Math.sin(ch.t * 9 + i);
+        ctx.beginPath();
+        ctx.moveTo(sx - k, sy); ctx.lineTo(sx + k, sy);
+        ctx.moveTo(sx, sy - k); ctx.lineTo(sx, sy + k);
+        ctx.stroke();
+      }
+      ctx.restore();
+
       ctx.rotate(Math.sin(ch.t * 2) * 0.35);
       ctx.scale(1, ch.side === 0 ? 1 : -1);          // 持ち主の側を向く
 
-      ctx.globalAlpha = 0.35 * pulse;                // 外側の輪
-      ctx.strokeStyle = col; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(0, 0, 22 + pulse * 4, 0, TAU); ctx.stroke();
-      ctx.globalAlpha = 1;
-
-      ctx.shadowColor = col; ctx.shadowBlur = 22 * pulse;
-      ctx.fillStyle = col;
+      ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 26 * pulse;
+      ctx.fillStyle = '#ffffff';
       if (ch.kind === 'shot') {
         // 通常攻撃の強化＝広がる3本の矢
         for (const a of [-0.5, 0, 0.5]) {

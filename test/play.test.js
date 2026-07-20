@@ -197,6 +197,19 @@ check('畑が中央帯に収まる',
   }
   p.shot = 0; p.beam = 0; p.stun = 0; p.charge = 0;
   check('どの強化段階でも描画の save/restore が釣り合う', bad.length === 0, bad.join(', '));
+
+  // 強化のかけらは光の演出が重いので、描画の釣り合いを個別にも確かめる
+  for (const kind of ['beam', 'shot']) {
+    for (const side of [0, 1]) {
+      G.chips.length = 0;
+      G.chips.push({ x: 400, y: Z.cy, vx: 0, vy: 0, side, t: 1.2, power: true, kind });
+      gfx.depth = 0;
+      draw();
+      if (gfx.depth !== 0) bad.push(`${kind}/side${side} 深さ=${gfx.depth}`);
+    }
+  }
+  G.chips.length = 0;
+  check('強化のかけらを描いても save/restore が釣り合う', bad.length === 0, bad.join(', '));
   check('描画の入れ子が深くなりすぎない', gfx.maxDepth < 20, `最大の深さ=${gfx.maxDepth}`);
 }
 
