@@ -4,7 +4,7 @@ let src=fs.readFileSync(require('path').join(__dirname,'..','index.html'),'utf8'
 src=src.slice(src.indexOf('<script>')+8, src.lastIndexOf('</script>'));
 const noop=()=>{};
 const ctxStub=new Proxy({},{get:(t,k)=>{
-  if(k==='createLinearGradient')return ()=>({addColorStop:noop});
+  if(k==='createLinearGradient'||k==='createRadialGradient')return ()=>({addColorStop:noop});
   if(k==='measureText')return ()=>({width:10});
   if(k==='arc')return (x,y,r)=>{ if(r<0) throw new Error('負の半径 '+r); };
   return noop;}});
@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
@@ -95,6 +95,33 @@ check('畑が中央帯に収まる',
     }
   }
   check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
+  makeField(G.stage);
+}
+
+// --- 爆発の巻き込み ---
+{
+  const p0 = G.players[0], p1 = G.players[1];
+  p0.stun = 0; p1.stun = 0;
+  p0.x = 400; p0.y = Z.bot.y0;                  // 畑のすぐそばに立つ
+  p1.x = 400; p1.y = Z.top.y0;                  // 遠くにいる
+  G.blasts.length = 0; G.flash = 0;
+
+  explode(400, Z.bot.y0 - FIELD.cell);          // 近くで爆発
+  check('爆風に巻き込まれると動けなくなる', p0.stun === BLAST_STUN, `stun=${p0.stun}`);
+  check('離れていれば巻き込まれない', p1.stun === 0, `stun=${p1.stun}`);
+  check('衝撃波と閃光が出る', G.blasts.length === 1 && G.flash > 0.5,
+        `blasts=${G.blasts.length} flash=${G.flash.toFixed(2)}`);
+  // スタン中は撃てず、解除されたら指を置き直さずに撃ち始められる
+  p0.firing = true; p0.cool = 0; G.bullets.length = 0;
+  for (let i = 0; i < 20; i++) update(1/60);
+  check('爆発で動けない間は撃てない', G.bullets.length === 0, `弾=${G.bullets.length}`);
+
+  // 時間が経てば解除され、衝撃波も消える
+  for (let i = 0; i < 120; i++) update(1/60);
+  check('2秒後には動けるようになる', p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
+  check('解除後は指を置き直さずに撃てる', G.bullets.length > 0, `弾=${G.bullets.length}`);
+  check('衝撃波は後片付けされる', G.blasts.length === 0, `blasts=${G.blasts.length}`);
+  check('閃光も消える', G.flash === 0, `flash=${G.flash}`);
   makeField(G.stage);
 }
 

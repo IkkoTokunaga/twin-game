@@ -7,7 +7,7 @@ src = src.slice(src.indexOf('<script>') + 8, src.lastIndexOf('</script>'));
 // --- 最小限のDOM/Canvasスタブ ---
 const noop = () => {};
 const ctxStub = new Proxy({}, { get: (t, k) => {
-  if (k === 'createLinearGradient') return () => ({ addColorStop: noop });
+  if (k === 'createLinearGradient' || k === 'createRadialGradient') return () => ({ addColorStop: noop });
   if (k === 'measureText') return () => ({ width: 10 });
   if (k === 'canvas') return {};
   return noop;

@@ -253,8 +253,10 @@ const SFX = {
     });
   },
   bomb() {
-    noiseBurst({ f:1800, f2:60, dur:0.7, vol:0.5 });
-    tone({ f:140, f2:35, type:'square', dur:0.5, vol:0.24 });
+    noiseBurst({ f:2600, f2:40, dur:1.0, vol:0.6 });
+    noiseBurst({ f:400, f2:60, dur:0.7, vol:0.45, filter:'lowpass', delay:0.02 });
+    tone({ f:150, f2:28, type:'square', dur:0.7, vol:0.3 });
+    tone({ f:70,  f2:24, type:'sawtooth', dur:0.9, vol:0.22, delay:0.03 });
   },
   near() {                                       // スターが近いことを知らせる小さな音
     throttled('near', 220, () => tone({ f:1180, f2:1560, type:'triangle', dur:0.12, vol:0.10 }));
@@ -385,6 +387,8 @@ const G = {
   chips: [],              // ブロックから落ちるかけら（拾うとチャージ）
   bugs: [],               // おじゃまむし（当たると一時停止）
   bugT: 0,                // 次のおじゃまむしまでの秒数
+  blasts: [],             // 爆発の衝撃波
+  flash: 0,               // 画面全体の閃光
   parts: [],
   starsFound: 0,
   starsTotal: 0,
@@ -569,9 +573,7 @@ function breakBlock(c, r, ownerIdx, depth) {
   if (ownerIdx >= 0 && G.players[ownerIdx]) G.players[ownerIdx].dug++;
 
   if (b.type === B_BOMB) {
-    SFX.bomb();
-    G.shake = Math.max(G.shake, 14);
-    burst(pos.x, pos.y, '#ff8a3c', 26, 340, 7);
+    explode(pos.x, pos.y);
     if ((depth || 0) < 3) {
       for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
         if (!dc && !dr) continue;
@@ -617,6 +619,34 @@ function breakBlock(c, r, ownerIdx, depth) {
 }
 
 // 戻り値: 'none' 当たらなかった / 'blocked' 色違いで弾かれた / 'hit' 削れた
+// 爆発。派手な光と衝撃波を出し、範囲内のプレイヤーをしばらく動けなくする
+const BLAST_STUN = 1.5;                    // 巻き込まれた時に動けない秒数
+
+function explode(x, y) {
+  const radius = FIELD.cell * 1.8;
+  SFX.bomb();
+  G.shake = Math.max(G.shake, 26);
+  G.flash = Math.min(1, G.flash + 0.75);
+  G.blasts.push({ x, y, t: 0, dur: 0.55, rMax: radius });
+
+  burst(x, y, '#ffffff', 26, 620, 9);
+  burst(x, y, '#ffd54a', 34, 460, 8);
+  burst(x, y, '#ff8a3c', 40, 340, 10);
+  burst(x, y, '#c0392b', 22, 220, 12);
+
+  for (const p of G.players) {
+    const dx = p.x - x, dy = p.y - y;
+    if (dx * dx + dy * dy < radius * radius) {     // 爆風に巻き込まれた
+      // firing は落とさない。発射判定が stun を見ているので、
+      // 解除と同時に自動で撃ち始められる（指を置き直す必要がない）
+      p.stun = Math.max(p.stun, BLAST_STUN);
+      SFX.stun();
+      burst(p.x, p.y, '#ff8a3c', 24, 280, 6);
+      G.banner = { text: P_COLORS[p.idx].name + ' ばくはつに まきこまれた！', life: 1.2 };
+    }
+  }
+}
+
 function damageBlock(c, r, dmg, ownerIdx) {
   const b = blockAt(c, r);
   if (!b) return 'none';
@@ -641,6 +671,7 @@ function resetGame() {
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
+  G.blasts.length = 0; G.flash = 0;
   G.players = [makePlayer(0), makePlayer(1)];
   makeField(1);
   G.nextT = 0;
@@ -868,6 +899,7 @@ function update(dt) {
       G.nextT = 0;
       G.stage++;
       G.bullets.length = 0; G.chips.length = 0; G.bugs.length = 0;
+      G.blasts.length = 0; G.flash = 0;
       makeField(G.stage);
       G.banner = { text: 'ステージ ' + G.stage, life: 1.6 };
       SFX.stage();
@@ -967,6 +999,14 @@ function update(dt) {
     }
   }
 
+  /* --- 爆発の衝撃波と閃光 --- */
+  G.flash = Math.max(0, G.flash - dt * 3.4);
+  for (let i = G.blasts.length - 1; i >= 0; i--) {
+    const bl = G.blasts[i];
+    bl.t += dt;
+    if (bl.t >= bl.dur) G.blasts.splice(i, 1);
+  }
+
   /* --- おじゃまむし --- */
   G.bugT -= dt;
   if (G.bugT <= 0) {
@@ -985,7 +1025,6 @@ function update(dt) {
       const dx = bg.x - p.x, dy = bg.y - p.y, rr = bg.r + SHIP.hit;
       if (dx * dx + dy * dy < rr * rr) {           // ぶつかった＝しばらく動けない
         p.stun = 1.1;
-        p.firing = false;
         SFX.stun();
         G.shake = Math.max(G.shake, 12);
         burst(bg.x, bg.y, '#ff7ad9', 22, 260, 5);
@@ -1067,6 +1106,7 @@ function draw() {
     drawBugs();
     drawChips();
     drawGems();
+    drawBlasts();
     for (const b of G.bullets) drawBullet(b);
     for (const p of G.players) drawShip(p);
     drawParts();
@@ -1076,6 +1116,14 @@ function draw() {
   }
 
   ctx.restore();
+
+  if (G.flash > 0.01) {                 // 爆発の瞬間だけ画面が白く飛ぶ
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.45, G.flash * 0.45);
+    ctx.fillStyle = '#fff6e0';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'pause') drawPauseOverlay();
@@ -1296,6 +1344,49 @@ function drawLockIcon(cx, cy, cell, owner) {
   ctx.moveTo(0, -r); ctx.lineTo(r * 0.78, r * 0.62); ctx.lineTo(0, r * 0.24);
   ctx.lineTo(-r * 0.78, r * 0.62);
   ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function drawBlasts() {
+  ctx.save();
+  for (const bl of G.blasts) {
+    const q = clamp(bl.t / bl.dur, 0, 1);
+
+    // 内側の火球（すぼみながら消える）
+    const fr = bl.rMax * (0.55 - q * 0.35);
+    if (fr > 0) {
+      const g = ctx.createRadialGradient(bl.x, bl.y, 0, bl.x, bl.y, fr);
+      g.addColorStop(0,   `rgba(255,255,255,${(1 - q) * 0.95})`);
+      g.addColorStop(0.4, `rgba(255,213,74,${(1 - q) * 0.75})`);
+      g.addColorStop(1,   'rgba(255,90,30,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(bl.x, bl.y, fr, 0, TAU); ctx.fill();
+    }
+
+    // 広がる衝撃波（2重）
+    for (const [scale, wide] of [[1, 5], [0.72, 2.5]]) {
+      const rr = bl.rMax * q * scale;
+      if (rr <= 0) continue;
+      ctx.globalAlpha = (1 - q) * 0.85;
+      ctx.strokeStyle = q < 0.4 ? '#ffffff' : '#ffb03c';
+      ctx.lineWidth = wide * (1 - q) + 1;
+      ctx.beginPath(); ctx.arc(bl.x, bl.y, rr, 0, TAU); ctx.stroke();
+    }
+
+    // 飛び散る火の粉の筋
+    ctx.globalAlpha = (1 - q) * 0.6;
+    ctx.strokeStyle = '#ffd54a';
+    ctx.lineWidth = 2;
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * TAU + bl.x;
+      const r0 = bl.rMax * q * 0.85, r1 = r0 + bl.rMax * 0.16 * (1 - q);
+      ctx.beginPath();
+      ctx.moveTo(bl.x + Math.cos(a) * r0, bl.y + Math.sin(a) * r0);
+      ctx.lineTo(bl.x + Math.cos(a) * r1, bl.y + Math.sin(a) * r1);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
 }
 
@@ -1597,16 +1688,17 @@ function drawTitle() {
     ctx.fillText('★ の近くを掘ると光の粒が出ます', 0, 50);
     ctx.fillText('◆ かけらは受け止めるとチャージ / むしに当たると少し動けない', 0, 72);
     ctx.fillText('色つきブロックは、その色のプレイヤーだけが壊せます', 0, 94);
+    ctx.fillText('爆弾の爆風に巻き込まれると しばらく動けません', 0, 116);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 118);
+    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 140);
     ctx.fillText(FS.supported
       ? 'タップで全画面になります（右端のボタンでいつでも切替）'
-      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 140);
+      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 162);
 
     ctx.fillStyle = '#fff';
     ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
     ctx.font = '800 20px system-ui, sans-serif';
-    ctx.fillText('TAP TO START', 0, 180);
+    ctx.fillText('TAP TO START', 0, 202);
     ctx.restore();
   }
   ctx.restore();
