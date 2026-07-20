@@ -57,6 +57,9 @@ function resize() {
   FS.btn.x = W - 36;
   FS.btn.y = Z.cy;
 
+  // 指1本ぶん＋余白。小さい画面で離れすぎないよう上下限を設ける
+  SHIP.offset = clamp(H * 0.10, 62, 115);
+
   makeStars();
   for (const p of G.players) clampPlayer(p);
   if (G.enemy) { G.enemy.x = Math.min(Math.max(G.enemy.x, W*0.2), W*0.8); }
@@ -106,6 +109,13 @@ for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
   document.addEventListener(ev, () => { resize(); setTimeout(resize, 120); });
 }
 
+/* ---------------- 自機のサイズと指との位置関係 ---------------- */
+const SHIP = {
+  scale: 1.8,     // 見た目の拡大率
+  hit: 17,        // 当たり判定の半径（見た目より小さめ＝弾幕ゲーの定石）
+  offset: 80,     // 指から敵側へどれだけ離して表示するか（resizeで画面に合わせて調整）
+};
+
 /* ---------------- utils ---------------- */
 const rand  = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
@@ -151,6 +161,7 @@ function makePlayer(idx) {
     x: W / 2,
     y: bottom ? (Z.bot.y0 + Z.bot.y1) / 2 : (Z.top.y0 + Z.top.y1) / 2,
     tx: W / 2, ty: 0,
+    fx: 0, fy: 0,                        // 指の実座標（機体はここから offset だけ敵側にずれる）
     hp: 100, maxHp: 100,
     charge: 0, maxCharge: 100,
     cool: 0,
@@ -164,10 +175,20 @@ function makePlayer(idx) {
 
 function clampPlayer(p) {
   const z = p.bottom ? Z.bot : Z.top;
-  p.x = clamp(p.x, 26, W - 26);
+  const m = 20 * SHIP.scale;             // 機体が画面端からはみ出さない余白
+  p.x = clamp(p.x, m, W - m);
   p.y = clamp(p.y, z.y0, z.y1);
-  p.tx = clamp(p.tx, 26, W - 26);
+  p.tx = clamp(p.tx, m, W - m);
   p.ty = clamp(p.ty, z.y0, z.y1);
+}
+
+/* 指の位置から機体の目標位置を決める。
+   指より敵側にずらすことで、機体が指の下に隠れないようにする。 */
+function aimFromFinger(p, cx, cy) {
+  p.fx = cx; p.fy = cy;
+  p.tx = cx;
+  p.ty = cy + p.dirY * SHIP.offset;
+  clampPlayer(p);
 }
 
 function makeEnemy(wave) {
@@ -228,18 +249,15 @@ function onDown(e) {
   p.pointer = e.pointerId;
   pointers.set(e.pointerId, idx);
   p.firing = true;
-  p.tx = e.clientX; p.ty = e.clientY;
-  clampPlayer(p);
+  aimFromFinger(p, e.clientX, e.clientY);
 }
 
 function onMove(e) {
   const idx = pointers.get(e.pointerId);
   if (idx === undefined) return;
   e.preventDefault();
-  const p = G.players[idx];
   // 座標がまとめて届く端末では最後の座標だけ使えば十分
-  p.tx = e.clientX; p.ty = e.clientY;
-  clampPlayer(p);
+  aimFromFinger(G.players[idx], e.clientX, e.clientY);
 }
 
 function onUp(e) {
@@ -276,15 +294,16 @@ function burst(x, y, color, n, spd, size) {
 function playerShoot(p) {
   const big = p.charge >= p.maxCharge;
   const c = P_COLORS[p.idx];
+  const muzzle = p.y + p.dirY * 20 * SHIP.scale;   // 機体の拡大に合わせて発射位置もずらす
   if (big) {
     p.charge = 0;
-    G.bullets.push({ x:p.x, y:p.y + p.dirY*20, vy: p.dirY*1500, r:20, dmg:110, owner:p.idx, pierce:true, color:c.main });
-    burst(p.x, p.y + p.dirY * 20, c.main, 18, 320, 6);
+    G.bullets.push({ x:p.x, y:muzzle, vy: p.dirY*1500, r:20, dmg:110, owner:p.idx, pierce:true, color:c.main });
+    burst(p.x, muzzle, c.main, 18, 320, 6);
     G.shake = Math.max(G.shake, 8);
     p.cool = 0.42;
   } else {
-    for (const off of [-11, 11]) {
-      G.bullets.push({ x:p.x+off, y:p.y + p.dirY*18, vy: p.dirY*1150, r:5, dmg:8, owner:p.idx, pierce:false, color:c.main });
+    for (const off of [-11 * SHIP.scale, 11 * SHIP.scale]) {
+      G.bullets.push({ x:p.x+off, y:muzzle, vy: p.dirY*1150, r:5, dmg:8, owner:p.idx, pierce:false, color:c.main });
     }
     p.cool = 0.115;
   }
@@ -349,6 +368,7 @@ function update(dt) {
       p.respawn -= dt;
       if (p.respawn <= 0) {
         p.down = false; p.hp = 60; p.invuln = 2.5; p.charge = 0;
+        if (p.pointer !== -1) p.firing = true;   // 指を置いたままなら復活と同時に射撃再開
         burst(p.x, p.y, P_COLORS[p.idx].main, 26, 240, 5);
         G.banner = { text: P_COLORS[p.idx].name + ' REVIVED', life: 1.2 };
       }
@@ -405,7 +425,7 @@ function update(dt) {
     if (e.x < -40 || e.x > W + 40 || e.y < -40 || e.y > H + 40) { G.ebullets.splice(i, 1); continue; }
     for (const p of G.players) {
       if (p.down || p.invuln > 0) continue;
-      const dx = e.x - p.x, dy = e.y - p.y, rr = e.r + 15;
+      const dx = e.x - p.x, dy = e.y - p.y, rr = e.r + SHIP.hit;
       if (dx*dx + dy*dy < rr*rr) {
         p.hp -= e.dmg; p.hitFlash = 1;
         G.shake = Math.max(G.shake, 6);
@@ -535,9 +555,23 @@ function roundRect(c, x, y, w, h, r) {
 
 function drawShip(p) {
   const c = P_COLORS[p.idx];
+  // 指と機体をつなぐガイド（オフセットしていることが直感的にわかるように）
+  if (p.pointer !== -1) {
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = c.main;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath(); ctx.moveTo(p.fx, p.fy); ctx.lineTo(p.x, p.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.22;
+    ctx.beginPath(); ctx.arc(p.fx, p.fy, 22, 0, TAU); ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.save();
   ctx.translate(p.x, p.y);
-  ctx.scale(1, p.bottom ? 1 : -1);   // 上側プレイヤーは上下反転
+  ctx.scale(SHIP.scale, p.bottom ? SHIP.scale : -SHIP.scale);   // 上側プレイヤーは上下反転
 
   if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) ctx.globalAlpha = 0.35;
 
@@ -754,17 +788,18 @@ function drawTitle() {
     ctx.fillStyle = 'rgba(255,255,255,0.78)';
     ctx.font = '600 15px system-ui, sans-serif';
     ctx.fillText('自分側のエリアを指でなぞって移動 / 触れている間は連射', 0, 6);
-    ctx.fillText('ダメージでチャージが溜まると自動で貫通ビーム', 0, 30);
+    ctx.fillText('機体は指より少し前に出るので、指で隠れません', 0, 28);
+    ctx.fillText('ダメージでチャージが溜まると自動で貫通ビーム', 0, 50);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 54);
+    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 76);
     ctx.fillText(FS.supported
       ? 'タップで全画面になります（右端のボタンでいつでも切替）'
-      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 74);
+      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 98);
 
     ctx.fillStyle = '#fff';
     ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
     ctx.font = '800 20px system-ui, sans-serif';
-    ctx.fillText('TAP TO START', 0, 110);
+    ctx.fillText('TAP TO START', 0, 138);
     ctx.restore();
   }
   ctx.restore();
