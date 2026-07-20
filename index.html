@@ -64,6 +64,11 @@ function resize() {
   PAUSE.btn.x = 36;
   PAUSE.btn.y = Z.cy - 66;
 
+  // スタート画面の人数選択ボタン（中央帯に縦に2つ）
+  const mw = Math.min(320, W * 0.62), mh = 88;
+  MENU.solo = { x: (W - mw) / 2, y: Z.cy - mh - 12, w: mw, h: mh };
+  MENU.duo  = { x: (W - mw) / 2, y: Z.cy + 12,      w: mw, h: mh };
+
   updateRect();
   makeStars();
   for (const p of G.players) clampPlayer(p);
@@ -86,6 +91,10 @@ if (window.visualViewport) {
 }
 const localX = (e) => (e.clientX - rect.left) * rect.sx;
 const localY = (e) => (e.clientY - rect.top)  * rect.sy;
+
+/* ---------------- スタート画面の人数選択 ---------------- */
+const MENU = { solo: { x:0, y:0, w:0, h:0 }, duo: { x:0, y:0, w:0, h:0 } };
+const inRect = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
 /* ---------------- ポーズ ---------------- */
 const PAUSE = { btn: { x:0, y:0, r:26 } };
@@ -346,8 +355,10 @@ function stageSetup(n) {
     hardRate: Math.min(0.05 + (n - 1) * 0.05, 0.30),   // かたいブロックの割合
     bombRate: Math.min(0.03 + (n - 1) * 0.02, 0.12),   // ばくだんブロックの割合
     rows: 5,
-    lockRate: Math.min(0.07 + (n - 1) * 0.02, 0.14), // 色つきブロックの割合（各色ごと）
-    bugEvery: Math.max(3.2, 7.5 - (n - 1) * 0.6),   // おじゃまむしの出る間隔（秒）
+    // ひとり用では相手の色のブロックが壊せず詰むので、色つきブロック自体を出さない
+    lockRate: G.solo ? 0 : Math.min(0.07 + (n - 1) * 0.02, 0.14),
+    // ひとり用は全部のおじゃまむしが自分に来るので、出る間隔を空ける
+    bugEvery: Math.max(3.2, 7.5 - (n - 1) * 0.6) * (G.solo ? 1.5 : 1),
   };
 }
 
@@ -380,6 +391,7 @@ const G = {
   mode: 'title',          // title | play | pause | clear
   t: 0,
   stage: 1,
+  solo: false,            // ひとり用（青のプレイヤーだけ）
   score: 0,
   players: [],
   bullets: [],            // プレイヤー弾
@@ -418,6 +430,7 @@ function makePlayer(idx) {
     stars: 0,                            // 見つけたスターの数
     cool: 0,
     stun: 0,                             // おじゃまむしに触れると少しの間うごけない
+    outside: false,                      // 指が画面の外にある間は停止する
     caught: 0,                           // 拾ったかけらの数
     firing: false,
     pointer: -1,
@@ -490,19 +503,25 @@ function cellCenter(c, r) {
 
 function makeField(stage) {
   const S = stageSetup(stage);
-  const bandY0 = Z.top.y1 + H * 0.012;
-  const bandY1 = Z.bot.y0 - H * 0.012;
-  const cell = Math.max(28, (bandY1 - bandY0) / S.rows);
+  // ブロックの大きさは常にふたり用の中央帯を基準にして揃える
+  const duoY0 = Z.top.y1 + H * 0.012;
+  const duoY1 = Z.bot.y0 - H * 0.012;
+  const cell = Math.max(28, (duoY1 - duoY0) / S.rows);
+
+  // ひとり用では、2人目が使うはずだった上側の陣地まで畑を広げる
+  const topY = G.solo ? Z.top.y0 : duoY0;
+  const rows = Math.max(1, Math.floor((duoY1 - topY) / cell));
+
   // 畑は機体が届く範囲だけに敷く。はみ出すと端の列が永久に掘れなくなる
   const inset = 20 * SHIP.scale;
   const cols = Math.max(4, Math.floor((W - inset * 2) / cell));
 
   FIELD.cell = cell;
-  FIELD.rows = S.rows;
+  FIELD.rows = rows;
   FIELD.cols = cols;
   FIELD.x0 = (W - cols * cell) / 2;
-  FIELD.y0 = bandY0;
-  FIELD.grid = new Array(cols * S.rows);
+  FIELD.y0 = duoY1 - rows * cell;      // 青プレイヤー側の入口の高さは常に同じ
+  FIELD.grid = new Array(cols * rows);
 
   const tHard = S.hardRate;
   const tBomb = tHard + S.bombRate;
@@ -521,14 +540,16 @@ function makeField(stage) {
 
   // スターを重複なく隠す。上下の端の列は序盤で当たりやすいので避ける
   const pool = [];
-  for (let r = 0; r < S.rows; r++) {
+  for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const b = FIELD.grid[idxAt(c, r)];
       if (b.type !== B_BOMB) pool.push(idxAt(c, r));
     }
   }
+  // 畑が広いひとり用は、その広さに見合うだけスターを増やす
+  const want = G.solo ? Math.round(S.stars * 1.5) : S.stars;
   let placed = 0;
-  while (placed < S.stars && pool.length) {
+  while (placed < want && pool.length) {
     const k = Math.floor(rand(0, pool.length));
     FIELD.grid[pool[k]].star = true;
     pool.splice(k, 1);
@@ -620,10 +641,10 @@ function breakBlock(c, r, ownerIdx, depth) {
 
 // 戻り値: 'none' 当たらなかった / 'blocked' 色違いで弾かれた / 'hit' 削れた
 // 爆発。派手な光と衝撃波を出し、範囲内のプレイヤーをしばらく動けなくする
-const BLAST_STUN = 1.5;                    // 巻き込まれた時に動けない秒数
+const BLAST_STUN = 2.5;                    // 巻き込まれた時に動けない秒数
 
 function explode(x, y) {
-  const radius = FIELD.cell * 1.8;
+  const radius = FIELD.cell * 2.6;   // 陣地の奥まで届く広さ
   SFX.bomb();
   G.shake = Math.max(G.shake, 26);
   G.flash = Math.min(1, G.flash + 0.75);
@@ -667,12 +688,14 @@ function damageBlock(c, r, dmg, ownerIdx) {
   return 'hit';
 }
 
-function resetGame() {
+function resetGame(solo) {
+  G.solo = !!solo;
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
   G.blasts.length = 0; G.flash = 0;
-  G.players = [makePlayer(0), makePlayer(1)];
+  // ひとり用は青（下側）のみ。上側は生成しないので、そちらを触っても何も起きない
+  G.players = G.solo ? [makePlayer(0)] : [makePlayer(0), makePlayer(1)];
   makeField(1);
   G.nextT = 0;
   G.shake = 0;
@@ -724,9 +747,12 @@ function onDown(e) {
   if (G.mode === 'pause') { setPaused(false); return; }
 
   if (G.mode === 'title') {
+    const solo = inRect(MENU.solo, ex, ey);
+    const duo  = inRect(MENU.duo,  ex, ey);
+    if (!solo && !duo) return;                 // ボタン以外を触っても始まらない
     // 最初のタップ＝ユーザー操作なので、ここでしか全画面には入れない
     if (FS.supported && !isFullscreen()) enterFullscreen();
-    resetGame(); G.mode = 'play';
+    resetGame(solo); G.mode = 'play';
     SFX.stage();
     // return せず、この指をそのまま操作に使う（指を置き直さなくて済む）
   }
@@ -754,10 +780,23 @@ function onMove(e) {
   const rec = pointers.get(e.pointerId);
   if (!rec) return;
   e.preventDefault();
-  rec.x = localX(e); rec.y = localY(e);
+  const x = localX(e), y = localY(e);
+  if (!isFinite(x) || !isFinite(y)) return;
+  rec.x = x; rec.y = y;
+
   const p = G.players[rec.idx];
   // 操作中の指だけが機体を動かす（同じ側の他の指は位置だけ覚えておく）
-  if (p && p.pointer === e.pointerId) aimFromFinger(p, rec.x, rec.y);
+  if (!p || p.pointer !== e.pointerId) return;
+
+  // 指が画面の外へ出たら、その場で停止して撃つのもやめる。
+  // 戻ってくればそのまま操作を再開する。
+  const pad = 4;
+  const out = x < -pad || y < -pad || x > W + pad || y > H + pad;
+  p.outside = out;
+  if (out) { p.firing = false; return; }
+
+  p.firing = true;
+  aimFromFinger(p, x, y);
 }
 
 function onUp(e) {
@@ -776,6 +815,7 @@ function releasePointer(p, id) {
   if (i !== -1) p.stack.splice(i, 1);
   const next = p.stack.length ? p.stack[0] : -1;   // 先に触れていた指へ戻す
   p.pointer = next;
+  p.outside = false;
   if (next === -1) {
     p.firing = false;
     return;
@@ -788,7 +828,7 @@ function releasePointer(p, id) {
 // アプリ切り替えなどでイベントを取りこぼしても、押しっぱなし状態を残さない
 function releaseAllPointers() {
   pointers.clear();
-  for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
+  for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; p.outside = false; }
 }
 
 cv.addEventListener('pointerdown',   onDown,  { passive:false });
@@ -873,11 +913,13 @@ function update(dt) {
     const act = p.stack.length ? p.stack[0] : -1;
     if (act !== p.pointer) {
       p.pointer = act;
+      p.outside = false;
       p.firing = act !== -1;
     }
 
     // 指の位置へ滑らかに追従（そのままだとカクつくので補間）
-    if (p.pointer !== -1) {
+    // 指が画面の外にある間は動かさない
+    if (p.pointer !== -1 && !p.outside) {
       const k = 1 - Math.pow(0.0000015, dt);
       p.x += (p.tx - p.x) * k;
       p.y += (p.ty - p.y) * k;
@@ -1038,10 +1080,11 @@ function update(dt) {
 
 function spawnBug() {
   if (!FIELD.cell) return;
-  const side = Math.random() < 0.5 ? 0 : 1;        // どちらの陣地へ向かうか
+  const side = G.solo ? 0 : (Math.random() < 0.5 ? 0 : 1);   // どちらの陣地へ向かうか
+  const fy0 = FIELD.y0, fy1 = FIELD.y0 + FIELD.rows * FIELD.cell;
   G.bugs.push({
     x: rand(FIELD.x0 + 20, FIELD.x0 + FIELD.cols * FIELD.cell - 20),
-    y: Z.cy,
+    y: side === 0 ? fy1 : fy0,                    // 向かう側の畑の縁から出る
     vy: (side === 0 ? 1 : -1) * rand(70, 110),
     r: 17, hp: 16, side, t: rand(0, 6), flash: 0,
   });
@@ -1202,7 +1245,7 @@ function roundRect(c, x, y, w, h, r) {
 function drawShip(p) {
   const c = P_COLORS[p.idx];
   // 指と機体をつなぐガイド（オフセットしていることが直感的にわかるように）
-  if (p.pointer !== -1) {
+  if (p.pointer !== -1 && !p.outside) {
     ctx.save();
     ctx.globalAlpha = 0.28;
     ctx.strokeStyle = c.main;
@@ -1615,7 +1658,8 @@ function drawHUD() {
   // 中央に進捗（両側から読めるよう2方向に描画）
   for (const flip of [0, 1]) {
     ctx.save();
-    ctx.translate(W / 2, Z.cy + (flip ? -1 : 1) * (FIELD.cell * FIELD.rows / 2 + 22));
+    const fy0 = FIELD.y0, fy1 = FIELD.y0 + FIELD.rows * FIELD.cell;
+    ctx.translate(W / 2, flip ? fy0 - 20 : fy1 + 20);
     if (flip) ctx.rotate(Math.PI);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(255,255,255,0.62)';
@@ -1667,36 +1711,62 @@ function drawTitle() {
   ctx.save();
   ctx.fillStyle = 'rgba(3,4,12,0.72)';
   ctx.fillRect(0, 0, W, H);
+
+  // タイトルは上下どちらからも読めるよう2方向に描く
   for (const flip of [0, 1]) {
     ctx.save();
-    ctx.translate(W / 2, flip ? H * 0.27 : H * 0.73);
+    ctx.translate(W / 2, flip ? Z.cy - H * 0.20 : Z.cy + H * 0.20);
     if (flip) ctx.rotate(Math.PI);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-
     ctx.fillStyle = '#fff';
     ctx.shadowColor = '#31e6ff'; ctx.shadowBlur = 26;
     ctx.font = '900 46px system-ui, sans-serif';
-    ctx.fillText('STAR DIGGERS', 0, -46);
-    ctx.shadowBlur = 0;
+    ctx.fillText('STAR DIGGERS', 0, 0);
+    ctx.restore();
+  }
 
-    ctx.fillStyle = 'rgba(255,255,255,0.78)';
-    ctx.font = '600 15px system-ui, sans-serif';
-    ctx.fillText('まんなかのブロックをこわして ★ をさがそう', 0, 6);
-    ctx.fillText('自分のエリアを指でなぞって移動 / さわっている間は連射', 0, 28);
-    ctx.fillText('★ の近くを掘ると光の粒が出ます', 0, 50);
-    ctx.fillText('◆ かけらは受け止めるとチャージ / むしに当たると少し動けない', 0, 72);
-    ctx.fillText('色つきブロックは、その色のプレイヤーだけが壊せます', 0, 94);
-    ctx.fillText('爆弾の爆風に巻き込まれると しばらく動けません', 0, 116);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 140);
-    ctx.fillText(FS.supported
-      ? 'タップで全画面になります（右端のボタンでいつでも切替）'
-      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 162);
+  drawMenuButton(MENU.solo, 'ひとりで', P_COLORS[0].main, 1);
+  drawMenuButton(MENU.duo,  'ふたりで', '#ffffff', 2);
 
-    ctx.fillStyle = '#fff';
-    ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
-    ctx.font = '800 20px system-ui, sans-serif';
-    ctx.fillText('TAP TO START', 0, 202);
+  ctx.restore();
+}
+
+// 人数選択ボタン。文字は上下2方向に出して、どちら側からでも選べるようにする
+function drawMenuButton(r, label, col, people) {
+  const pulse = 0.5 + 0.5 * Math.sin(G.t * 3);
+  ctx.save();
+  ctx.globalAlpha = 0.12 + pulse * 0.06;
+  ctx.fillStyle = col;
+  roundRect(ctx, r.x, r.y, r.w, r.h, 18); ctx.fill();
+
+  ctx.globalAlpha = 0.55 + pulse * 0.35;
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2.5;
+  roundRect(ctx, r.x, r.y, r.w, r.h, 18); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  for (const flip of [0, 1]) {
+    ctx.save();
+    ctx.translate(cx, cy + (flip ? -1 : 1) * r.h * 0.22);
+    if (flip) ctx.rotate(Math.PI);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = col;
+    ctx.font = '800 24px system-ui, sans-serif';
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+  }
+
+  // 何人ぶんの機体が出るかをそのまま形で示す
+  for (let i = 0; i < people; i++) {
+    ctx.save();
+    ctx.translate(cx + (people === 1 ? 0 : (i ? 26 : -26)), cy);
+    ctx.scale(0.55, i === 1 ? -0.55 : 0.55);
+    ctx.fillStyle = P_COLORS[i] ? P_COLORS[i].main : col;
+    ctx.beginPath();
+    ctx.moveTo(0, -20); ctx.lineTo(14, 10); ctx.lineTo(6, 6);
+    ctx.lineTo(0, 13);  ctx.lineTo(-6, 6); ctx.lineTo(-14, 10);
+    ctx.closePath(); ctx.fill();
     ctx.restore();
   }
   ctx.restore();

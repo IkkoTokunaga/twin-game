@@ -29,8 +29,8 @@ global.performance = { now: () => Date.now() };
 global.requestAnimationFrame = noop;
 global.setTimeout = noop;
 
-const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect,PAUSE,zoneRect};')();
-const { onDown, onMove, onUp, update, G, pointers, Z, updateRect, PAUSE, zoneRect } = api;
+const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect,PAUSE,zoneRect,MENU};')();
+const { onDown, onMove, onUp, update, G, pointers, Z, updateRect, PAUSE, zoneRect, MENU } = api;
 
 const ev = (id, x, y) => ({ pointerId:id, clientX:x, clientY:y, preventDefault:noop });
 const BOT = 1000, TOP = 200;   // 画面高1200 → 中央600
@@ -40,7 +40,15 @@ const check = (name, cond, extra='') => {
   if (!cond) fail++;
 };
 
-// ゲーム開始
+// タイトルではボタン以外を触っても始まらない
+onDown(ev(90, 400, BOT));
+check('タイトルはボタン以外では始まらない', G.mode === 'title', `mode=${G.mode}`);
+
+// 「ふたりで」を選んで開始
+onDown(ev(1, MENU.duo.x + MENU.duo.w / 2, MENU.duo.y + MENU.duo.h / 2));
+check('ふたりで開始すると2機出る', G.mode === 'play' && G.players.length === 2,
+      `mode=${G.mode} 機数=${G.players.length}`);
+onUp(ev(1, MENU.duo.x + MENU.duo.w / 2, MENU.duo.y + MENU.duo.h / 2));
 onDown(ev(1, 400, BOT));
 check('開始タップがそのまま操作に使われる', G.players[0].pointer === 1 && G.players[0].firing === true,
       `pointer=${G.players[0].pointer} firing=${G.players[0].firing}`);
@@ -201,6 +209,39 @@ onDown(ev(30, PAUSE.btn.x, PAUSE.btn.y));
 check('ポーズボタンで止まる', G.mode === 'pause' && !pointers.has(30), `mode=${G.mode}`);
 onDown(ev(31, PAUSE.btn.x, PAUSE.btn.y));
 check('ポーズボタンで再開する', G.mode === 'play' && !pointers.has(31), `mode=${G.mode}`);
+
+// --- 指が画面の外へ出たら止まる ---
+pointers.clear();
+for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
+{
+  const p = G.players[0];
+  onDown(ev(40, 400, 1000));
+  onMove(ev(40, 300, 950));
+  const held = { x: p.tx, y: p.ty };
+  check('画面内では追従する', p.firing === true && p.pointer === 40);
+
+  onMove(ev(40, -120, 950));                      // 左の画面外へ引き出す
+  check('画面外に出ると攻撃が止まる', p.firing === false, `firing=${p.firing}`);
+  check('画面外に出ると機体も止まる',
+        p.tx === held.x && p.ty === held.y, `tx=${p.tx} (${held.x})`);
+
+  const before = { x: p.x, y: p.y };
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('画面外の間は弾が出ない', G.bullets.filter(b => b.owner === 0).length === 0,
+        `弾=${G.bullets.filter(b => b.owner === 0).length}`);
+  check('画面外の間は機体が移動しない',
+        Math.abs(p.x - before.x) < 0.01 && Math.abs(p.y - before.y) < 0.01,
+        `x=${p.x.toFixed(2)} (${before.x.toFixed(2)})`);
+
+  onMove(ev(40, 600, 1000));                      // 画面内へ戻す
+  check('戻ってくると再開する（指を置き直さなくてよい）',
+        p.firing === true && Math.abs(p.tx - held.x) > 1, `firing=${p.firing} tx=${p.tx}`);
+  G.bullets.length = 0;
+  for (let i = 0; i < 20; i++) update(1/60);
+  check('戻ってくると弾が出る', G.bullets.filter(b => b.owner === 0).length > 0,
+        `弾=${G.bullets.filter(b => b.owner === 0).length}`);
+  onUp(ev(40, 600, 1000));
+}
 
 // --- 表示される枠と、実際に動ける範囲が一致する ---
 pointers.clear();

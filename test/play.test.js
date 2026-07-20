@@ -16,13 +16,13 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
 
-onDown(ev(1,400,1000));                       // ゲーム開始
+onDown(ev(1, MENU.duo.x + MENU.duo.w/2, MENU.duo.y + MENU.duo.h/2));   // ふたりで開始
 check('ブロック畑が生成される', FIELD.grid.length > 0 && FIELD.cols>3 && FIELD.rows===5,
       `cols=${FIELD.cols} rows=${FIELD.rows} cell=${Math.round(FIELD.cell)}`);
 const total=FIELD.grid.filter(Boolean).length;
@@ -94,6 +94,60 @@ check('畑が中央帯に収まる',
   makeField(G.stage);
 }
 
+// --- ひとり用モード ---
+{
+  resetGame(true);
+  check('ひとり用は青のプレイヤーだけ', G.players.length === 1 && G.players[0].bottom === true,
+        `機数=${G.players.length}`);
+
+  // 畑がふたり用より広いこと（2人目の陣地まで使う）
+  makeField(1);
+  const soloRows = FIELD.rows, soloCount = FIELD.grid.filter(Boolean).length, soloStars = G.starsTotal;
+  const soloTop = FIELD.y0;
+  check('ひとり用の畑は2人目の陣地まで広がる', soloTop <= Z.top.y1 + 1,
+        `畑の上端=${soloTop.toFixed(0)} 上陣地の下端=${Z.top.y1.toFixed(0)}`);
+  check('ひとり用は青の陣地に食い込まない',
+        FIELD.y0 + FIELD.rows * FIELD.cell <= Z.bot.y0 + 1,
+        `畑の下端=${(FIELD.y0 + FIELD.rows * FIELD.cell).toFixed(0)} 下陣地=${Z.bot.y0.toFixed(0)}`);
+  let locks = 0;
+  for (let i = 0; i < 60; i++) {
+    makeField(1 + (i % 8));
+    locks += FIELD.grid.filter(b => b && (b.type === B_LOCK0 || b.type === B_LOCK1)).length;
+  }
+  check('ひとり用では色つきブロックが出ない（60畑ぶん）', locks === 0, `色つき=${locks}`);
+
+  // 上側を触っても何も起きない
+  const before = G.players[0].tx;
+  onDown(ev(80, 400, 200));
+  check('ひとり用では上側を触っても無反応',
+        G.players.length === 1 && G.players[0].tx === before, `tx=${G.players[0].tx}`);
+  onUp(ev(80, 400, 200));
+
+  // 実際に掘ってクリアできるか
+  onDown(ev(81, 400, 1000));
+  let cleared = false, soloFrames = 0;
+  for (let i = 0; i < 60 * 240; i++) {
+    soloFrames = i;
+    onMove(ev(81, 26 + (i * 9) % (800 - 52), 900 + (i % 200)));
+    update(1/60); draw();
+    if (G.stage >= 2) { cleared = true; break; }
+  }
+  check('ひとりでもステージをクリアできる', cleared,
+        `stage=${G.stage} 掘=${G.players[0].dug} 経過=${(soloFrames/60).toFixed(1)}秒`);
+  console.log(`  参考: ひとり用のクリア時間 ${(soloFrames/60).toFixed(1)}秒`);
+  onUp(ev(81, 400, 1000));
+
+  // ふたり用に戻す
+  resetGame(false);
+  makeField(1);
+  check('ふたり用に戻すと2機になる', G.players.length === 2);
+  check('ひとり用の畑はふたり用より広い',
+        soloRows > FIELD.rows && soloCount > FIELD.grid.filter(Boolean).length,
+        `ひとり=${soloRows}段/${soloCount}個 ふたり=${FIELD.rows}段/${FIELD.grid.filter(Boolean).length}個`);
+  check('ひとり用はスターも多い', soloStars > G.starsTotal, `ひとり★${soloStars} ふたり★${G.starsTotal}`);
+  onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
+}
+
 // --- 通常攻撃は扇状 ---
 {
   const p = G.players[0];
@@ -121,23 +175,32 @@ check('畑が中央帯に収まる',
   // 待機中に流れ弾が別の爆弾を誘爆させると検証がぶれるので、爆弾を取り除いておく
   for (const b of FIELD.grid) if (b && b.type === B_BOMB) { b.type = 0; b.hp = b.maxHp = 24; }
 
+  // 爆風の広さも確認する（陣地の奥まで届くこと）
   explode(400, Z.bot.y0 - FIELD.cell);          // 近くで爆発
   check('爆風に巻き込まれると動けなくなる', p0.stun === BLAST_STUN, `stun=${p0.stun}`);
   check('離れていれば巻き込まれない', p1.stun === 0, `stun=${p1.stun}`);
   check('衝撃波と閃光が出る', G.blasts.length === 1 && G.flash > 0.5,
         `blasts=${G.blasts.length} flash=${G.flash.toFixed(2)}`);
+  // 陣地の奥にいても届く広さか（爆心から2セルぶん奥）
+  p0.stun = 0; p0.y = Z.bot.y0 - FIELD.cell + FIELD.cell * 2.4;
+  explode(400, Z.bot.y0 - FIELD.cell);
+  check('陣地の奥に下がっていても爆風が届く', p0.stun === BLAST_STUN,
+        `距離=${(FIELD.cell*2.4).toFixed(0)}px stun=${p0.stun}`);
+  p0.y = Z.bot.y0; p0.stun = BLAST_STUN;
   // スタン中は撃てず、解除されたら指を置き直さずに撃ち始められる
   p0.firing = true; p0.cool = 0; G.bullets.length = 0;
   for (let i = 0; i < 20; i++) update(1/60);
-  check('爆発で動けない間は撃てない', G.bullets.length === 0, `弾=${G.bullets.length}`);
+  const mine = () => G.bullets.filter(b => b.owner === 0).length;
+  check('爆発で動けない間は撃てない', mine() === 0, `弾=${mine()}`);
 
   // 時間が経てば解除され、衝撃波も消える
-  for (let i = 0; i < 150 && p0.stun > 0; i++) update(1/60);
-  check('2秒以内に動けるようになる', p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
+  const stunFrames = Math.ceil(BLAST_STUN * 60);
+  for (let i = 0; i < stunFrames + 60 && p0.stun > 0; i++) update(1/60);
+  check(`フリーズは${BLAST_STUN}秒で解除される`, p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
   // 撃ち始めるかどうかを見たいので、いったん弾を空にしてから数フレームだけ進める
   G.bullets.length = 0;
   for (let i = 0; i < 10; i++) update(1/60);
-  check('解除後は指を置き直さずに撃てる', G.bullets.length > 0, `弾=${G.bullets.length}`);
+  check('解除後は指を置き直さずに撃てる', mine() > 0, `弾=${mine()}`);
   for (let i = 0; i < 60; i++) update(1/60);
   check('衝撃波は後片付けされる', G.blasts.length === 0, `blasts=${G.blasts.length}`);
   check('閃光も消える', G.flash === 0, `flash=${G.flash}`);
