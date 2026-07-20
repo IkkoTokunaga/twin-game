@@ -2127,12 +2127,8 @@ function drawPlayerHUD(p) {
 
   ctx.fillStyle = c.main;
   ctx.font = '700 12px system-ui, sans-serif';
-  const maxed = !nextPowerKind(p);
-  const toNext = CHIPS_PER_POWER - (p.caught % CHIPS_PER_POWER);
-  ctx.fillText(
-    `${c.name}   ★${p.stars}   ショット Lv${p.shot + 1}   ビーム Lv${p.beam + 1}` +
-    (maxed ? '  MAX' : `   ◆あと${toNext}`),
-    0, -16);
+  // 強化の段階は機体の見た目に出ているので、文字では出さない
+  ctx.fillText(`${c.name}   ★${p.stars}`, 0, -16);
   ctx.restore();
 }
 
