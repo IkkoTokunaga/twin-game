@@ -822,16 +822,20 @@ function update(dt) {
   bgmUpdate();
 }
 
+const GEM_POP = 1.1;   // ゲット演出の長さ（秒）
+
 function collectGem(g, ownerIdx) {
   if (g.taken) return;
-  g.taken = true; g.take = 0.5;
+  g.taken = true; g.take = GEM_POP;   // 拡大しながら回転する演出の時間
   G.starsFound++;
   G.score += 1000;
   const p = G.players[ownerIdx];
   if (p) { p.stars++; p.charge = p.maxCharge; }
   SFX.starGet();
-  burst(g.x, g.y, '#ffd54a', 40, 380, 8);
-  G.shake = Math.max(G.shake, 10);
+  burst(g.x, g.y, '#ffd54a', 46, 420, 9);
+  burst(g.x, g.y, '#fff6c8', 18, 220, 6);
+  G.shake = Math.max(G.shake, 12);
+  G.banner = { text: `★ ゲット！  ${G.starsFound} / ${G.starsTotal}`, life: 1.3 };
 
   if (G.starsFound >= G.starsTotal) {
     G.score += 500 * G.stage;
@@ -1034,12 +1038,28 @@ function drawField() {
 function drawGems() {
   ctx.save();
   for (const g of G.gems) {
-    const pop = g.taken ? 1 + (0.5 - g.take) * 2.4 : 1;
-    const a   = g.taken ? Math.max(0, g.take / 0.5) : 1;
+    let pop = 1, rot = Math.sin(g.t * 1.6) * 0.25, a = 1, rise = 0;
+    if (g.taken) {
+      const q = clamp(1 - g.take / GEM_POP, 0, 1);         // 0→1 の進行度
+      pop  = 1 + 2.8 * Math.sin(Math.min(1, q * 1.6) * Math.PI * 0.5);  // 一気に拡大して保つ
+      rot  = q * TAU * 3;                                  // 3回転
+      rise = -26 * q;
+      a    = q < 0.72 ? 1 : 1 - (q - 0.72) / 0.28;         // 最後だけ消える
+
+      // 広がる光の輪
+      ctx.save();
+      ctx.globalAlpha = (1 - q) * 0.55;
+      ctx.strokeStyle = '#ffd54a';
+      ctx.lineWidth = 4 * (1 - q) + 1;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y + rise, g.r * (1 + q * 5), 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.save();
-    ctx.globalAlpha = a;
-    ctx.translate(g.x, g.y);
-    ctx.rotate(Math.sin(g.t * 1.6) * 0.25);
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.translate(g.x, g.y + rise);
+    ctx.rotate(rot);
     ctx.scale(pop, pop);
     ctx.shadowColor = '#ffd54a';
     ctx.shadowBlur = 26 + Math.sin(g.t * 5) * 8;
