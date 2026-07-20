@@ -3,10 +3,14 @@ const fs=require('fs');
 let src=fs.readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
 src=src.slice(src.indexOf('<script>')+8, src.lastIndexOf('</script>'));
 const noop=()=>{};
+// save/restore の釣り合いを見るため深さを数える
+const gfx = { depth: 0, maxDepth: 0 };
 const ctxStub=new Proxy({},{get:(t,k)=>{
   if(k==='createLinearGradient'||k==='createRadialGradient')return ()=>({addColorStop:noop});
   if(k==='measureText')return ()=>({width:10});
   if(k==='arc')return (x,y,r)=>{ if(r<0) throw new Error('負の半径 '+r); };
+  if(k==='save')return ()=>{ gfx.depth++; gfx.maxDepth=Math.max(gfx.maxDepth,gfx.depth); };
+  if(k==='restore')return ()=>{ gfx.depth--; if(gfx.depth<0) throw new Error('restore が save より多い'); };
   return noop;}});
 const el={addEventListener:noop,getContext:()=>ctxStub,style:{},width:0,height:0,
   setPointerCapture:noop,releasePointerCapture:noop,
@@ -113,6 +117,30 @@ check('畑が中央帯に収まる',
   }
   check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
   makeField(G.stage);
+}
+
+// --- 強化段階ごとの機体の描画 ---
+{
+  resetGame(false);
+  G.mode = 'play';
+  const p = G.players[0];
+  let bad = [];
+  for (let shot = 0; shot < SHOT_LEVELS.length; shot++) {
+    for (let beam = 0; beam < BEAM_LEVELS.length; beam++) {
+      p.shot = shot; p.beam = beam;
+      for (const charged of [0, p.maxCharge]) {
+        for (const stun of [0, 1]) {
+          p.charge = charged; p.stun = stun;
+          gfx.depth = 0;
+          draw();
+          if (gfx.depth !== 0) bad.push(`shot${shot}/beam${beam} 深さ=${gfx.depth}`);
+        }
+      }
+    }
+  }
+  p.shot = 0; p.beam = 0; p.stun = 0; p.charge = 0;
+  check('どの強化段階でも描画の save/restore が釣り合う', bad.length === 0, bad.join(', '));
+  check('描画の入れ子が深くなりすぎない', gfx.maxDepth < 20, `最大の深さ=${gfx.maxDepth}`);
 }
 
 // --- かけらを集めるとビームが強化される ---
