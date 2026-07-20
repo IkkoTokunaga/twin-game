@@ -1107,6 +1107,10 @@ function update(dt) {
           G.score += 150;
           SFX.bugHit();
           burst(bg.x, bg.y, '#ff7ad9', 24, 300, 6);
+          // 倒したごほうびに、その場から強化のかけらを落とす
+          if (dropPowerChip(b.owner, bg.x, bg.y)) {
+            burst(bg.x, bg.y, '#ffffff', 16, 220, 5);
+          }
           G.bugs.splice(k, 1);
         }
         hitBug = true;
@@ -1265,21 +1269,23 @@ function nextPowerKind(p) {
   return room[first] ? first : (first === 'beam' ? 'shot' : 'beam');
 }
 
-function dropPowerChip(idx) {
-  if (!FIELD.cell) return;
+// x, y を渡すとその場から落ちる（省略すると畑の縁から）
+function dropPowerChip(idx, x, y) {
+  if (!FIELD.cell) return false;
   const p = G.players[idx];
-  if (!p) return;
+  if (!p) return false;
   const kind = nextPowerKind(p);
-  if (!kind) return;
+  if (!kind) return false;
   const side = idx === 1 ? 1 : 0;
   G.chips.push({
-    x: rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30),
-    y: side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0,
+    x: x !== undefined ? x : rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30),
+    y: y !== undefined ? y : (side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0),
     vx: rand(-25, 25),
     vy: (side === 0 ? 1 : -1) * 60,
     side, t: 0, power: true, kind,
   });
   SFX.powerDrop();
+  return true;
 }
 
 function spawnBug() {

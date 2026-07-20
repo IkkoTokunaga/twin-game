@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -280,6 +280,31 @@ check('畑が中央帯に収まる',
   check('強化するとビームが太く・強く・貫通が増える',
         lv2.r > lv1.r && lv2.dmg > lv1.dmg && lv2.pierceLeft > lv1.pierceLeft,
         `Lv1(r${lv1.r} 威力${lv1.dmg} 貫通${lv1.pierceLeft}) -> Lv2(r${lv2.r} 威力${lv2.dmg} 貫通${lv2.pierceLeft})`);
+
+  // --- おじゃま虫を倒すと強化のかけらが出る ---
+  p.beam = 0; p.shot = 0; p.stun = 0;
+  G.chips.length = 0; G.bugs.length = 0; G.bullets.length = 0;
+  G.bugs.push({ x: 400, y: Z.bot.y0 - 60, vy: 0, r: 17, hp: 16, side: 0, t: 0, flash: 0 });
+  G.bullets.push({ x: 400, y: Z.bot.y0 - 60, vx: 0, vy: -1, r: 5, dmg: 999,
+                   owner: 0, pierce: false, color: '#fff' });
+  update(1/60);
+  check('おじゃま虫を倒すと消える', G.bugs.length === 0, `残=${G.bugs.length}`);
+  const dropped = G.chips.filter(c => c.power);
+  check('おじゃま虫を倒すと強化のかけらが出る', dropped.length === 1, `かけら=${dropped.length}`);
+  check('かけらは倒した場所から落ちる',
+        dropped.length === 1 && Math.abs(dropped[0].x - 400) < 1, `x=${dropped[0] && dropped[0].x}`);
+  check('かけらは倒した人の側へ落ちる', dropped.length === 1 && dropped[0].side === 0);
+
+  // 最大まで強化済みなら出ない
+  p.beam = BEAM_LEVELS.length - 1; p.shot = SHOT_LEVELS.length - 1;
+  G.chips.length = 0; G.bugs.length = 0; G.bullets.length = 0;
+  G.bugs.push({ x: 400, y: Z.bot.y0 - 60, vy: 0, r: 17, hp: 16, side: 0, t: 0, flash: 0 });
+  G.bullets.push({ x: 400, y: Z.bot.y0 - 60, vx: 0, vy: -1, r: 5, dmg: 999,
+                   owner: 0, pierce: false, color: '#fff' });
+  update(1/60);
+  check('最大まで強化済みなら倒しても出ない',
+        G.chips.filter(c => c.power).length === 0, `かけら=${G.chips.length}`);
+  p.beam = 0; p.shot = 0; G.chips.length = 0; G.bullets.length = 0;
 
   // --- ダメージを受けると1段階下がる ---
   p.beam = 2; p.shot = 0; p.stun = 0;
