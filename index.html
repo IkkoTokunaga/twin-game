@@ -482,15 +482,21 @@ function clampPlayer(p) {
 // 領域なので操作が OS に奪われてしまう。指の可動範囲そのものを陣地に対応
 // させることで、画面端に触れなくても隅々まで届き、かつ機体は常に指より
 // 敵側（＝指に隠れない位置）に来る。
+// そのプレイヤーが機体を操作するために指を置く帯
+function fingerBand(p) {
+  const z = p.bottom ? Z.bot : Z.top;
+  return p.bottom
+    ? { f0: z.y0 + SHIP.gap, f1: H - SHIP.edgeY }
+    : { f0: SHIP.edgeY,      f1: z.y1 - SHIP.gap };
+}
+
 function aimFromFinger(p, cx, cy) {
   if (!isFinite(cx) || !isFinite(cy)) return;   // NaN が入ると機体が消える
   p.fx = cx; p.fy = cy;
   const z = p.bottom ? Z.bot : Z.top;
 
   // 指の可動範囲。機体が必ず指より敵側に来るよう、陣地の手前に gap を確保する
-  const gap = SHIP.gap;
-  const f0 = p.bottom ? z.y0 + gap  : SHIP.edgeY;
-  const f1 = p.bottom ? H - SHIP.edgeY : z.y1 - gap;
+  const { f0, f1 } = fingerBand(p);
   const t  = f1 > f0 ? clamp((cy - f0) / (f1 - f0), 0, 1) : 0;
   p.ty = z.y0 + t * (z.y1 - z.y0);
 
@@ -787,6 +793,16 @@ function onDown(e) {
   // 明示的にキャプチャして、指が画面端に出ても追跡が切れないようにする
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
 
+  // 同じ pointerId が別プレイヤーに残っていたら先に切り離す（idは再利用される）
+  for (const q of G.players) {
+    if (q === p) continue;
+    const k = q.stack.indexOf(e.pointerId);
+    if (k !== -1) {
+      q.stack.splice(k, 1);
+      if (q.pointer === e.pointerId) { q.pointer = -1; q.firing = false; }
+    }
+  }
+
   pointers.set(e.pointerId, { idx, x: ex, y: ey });
   p.stack.push(e.pointerId);        // 同じ側を複数の指で触っても取りこぼさない
 
@@ -836,7 +852,19 @@ function onUp(e) {
 function releasePointer(p, id) {
   const i = p.stack.indexOf(id);
   if (i !== -1) p.stack.splice(i, 1);
-  const next = p.stack.length ? p.stack[0] : -1;   // 先に触れていた指へ戻す
+
+  // 引き継ぎ先は「自分の操作帯に置かれた指」だけにする。
+  // 相手プレイヤーが自分側にうっかり触れていた指へ引き継ぐと、
+  // 機体がその指へ飛んで相手に操られる形になってしまう。
+  const band = fingerBand(p);
+  const slack = 60;
+  let next = -1;
+  for (const id2 of p.stack) {
+    const rec = pointers.get(id2);
+    if (!rec || rec.idx !== p.idx) continue;
+    if (rec.y >= band.f0 - slack && rec.y <= band.f1 + slack) { next = id2; break; }
+  }
+
   p.pointer = next;
   p.outside = false;
   if (next === -1) {
@@ -930,8 +958,11 @@ function update(dt) {
   /* --- プレイヤー --- */
   for (const p of G.players) {
     // イベントを取りこぼしても操作不能のまま固まらないよう、毎フレーム突き合わせる
+    // pointerId は離すと再利用されるため、「まだ存在するか」だけでは足りない。
+    // 相手プレイヤーのものになっていたら自分のスタックから外す。
     for (let i = p.stack.length - 1; i >= 0; i--) {
-      if (!pointers.has(p.stack[i])) p.stack.splice(i, 1);
+      const rec = pointers.get(p.stack[i]);
+      if (!rec || rec.idx !== p.idx) p.stack.splice(i, 1);
     }
     const act = p.stack.length ? p.stack[0] : -1;
     if (act !== p.pointer) {

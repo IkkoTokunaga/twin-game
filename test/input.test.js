@@ -210,6 +210,43 @@ check('ポーズボタンで止まる', G.mode === 'pause' && !pointers.has(30),
 onDown(ev(31, PAUSE.btn.x, PAUSE.btn.y));
 check('ポーズボタンで再開する', G.mode === 'play' && !pointers.has(31), `mode=${G.mode}`);
 
+// --- 2人プレイでの相互干渉 ---
+pointers.clear();
+for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
+{
+  const p1 = G.players[0], p2 = G.players[1];
+
+  // (1) 相手が自分側にうっかり置いた指へは操作が渡らない
+  onDown(ev(50, 400, 250));                 // P2が自分の操作帯に置く
+  onDown(ev(51, 400, 500));                 // 誰かが中央寄り（P2側だが操作帯の外）に触れる
+  const p2Held = { x: p2.tx, y: p2.ty };
+  check('中央寄りの指は操作を奪わない', p2.pointer === 50, `pointer=${p2.pointer}`);
+  onUp(ev(50, 400, 250));                   // P2が指を離す
+  check('離しても中央寄りの指には引き継がない',
+        p2.pointer === -1 && p2.firing === false, `pointer=${p2.pointer} firing=${p2.firing}`);
+  check('引き継がないので機体が飛ばない',
+        p2.tx === p2Held.x && p2.ty === p2Held.y, `tx=${p2.tx} (${p2Held.x})`);
+  onUp(ev(51, 400, 500));
+
+  // (2) pointerId が再利用されても、相手の操作に巻き込まれない
+  onDown(ev(60, 400, 1000));                // P1が操作中
+  check('P1が操作中', p1.pointer === 60 && p1.firing === true);
+  pointers.delete(60);                      // P1のpointerupを取りこぼした状況
+  onDown(ev(60, 400, 250));                 // 同じidがP2に割り当てられる
+  check('再利用されたidはP2のものになる', p2.pointer === 60, `p2.pointer=${p2.pointer}`);
+  check('P1は相手の指に紐づかない', p1.pointer !== 60, `p1.pointer=${p1.pointer}`);
+  check('P1は撃ち続けない', p1.firing === false, `firing=${p1.firing}`);
+
+  const p1Held = { x: p1.tx, y: p1.ty };
+  onMove(ev(60, 700, 300));                 // P2が動かす
+  check('P2を動かしてもP1は動かない',
+        p1.tx === p1Held.x && p1.ty === p1Held.y, `tx=${p1.tx} (${p1Held.x})`);
+  update(1/60);
+  check('突き合わせ後もP1は巻き込まれない',
+        p1.pointer === -1 && p1.firing === false, `pointer=${p1.pointer}`);
+  onUp(ev(60, 700, 300));
+}
+
 // --- 指が画面の外へ出たら止まる ---
 pointers.clear();
 for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
