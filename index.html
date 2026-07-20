@@ -792,16 +792,30 @@ function playerShoot(p) {
   const muzzle = p.y + p.dirY * 20 * SHIP.scale;   // 機体の拡大に合わせて発射位置もずらす
   if (big) {
     p.charge = 0;
-    // pierceLeft: 貫通できるブロック数。これが無いと一列を丸ごと消してしまう
-    G.bullets.push({ x:p.x, y:muzzle, vy: p.dirY*1500, r:20, dmg:110,
-                     owner:p.idx, pierce:true, pierceLeft:3, color:c.main });
+    // まっすぐ1本＋斜め2本の扇状。真ん中が主砲で、斜めは端をかすめる程度にする。
+    // pierceLeft: 貫通できるブロック数。これが無いと列を丸ごと消してしまう。
+    const beams = [
+      { a: 0,     spd: 1500, r: 20, dmg: 110, pierceLeft: 3 },
+      { a: -0.20, spd: 1380, r: 13, dmg: 70,  pierceLeft: 1 },
+      { a:  0.20, spd: 1380, r: 13, dmg: 70,  pierceLeft: 1 },
+    ];
+    for (const bm of beams) {
+      G.bullets.push({
+        x: p.x, y: muzzle,
+        vx: Math.sin(bm.a) * bm.spd,
+        vy: p.dirY * Math.cos(bm.a) * bm.spd,
+        r: bm.r, dmg: bm.dmg, owner: p.idx,
+        pierce: true, pierceLeft: bm.pierceLeft, color: c.main,
+      });
+    }
     burst(p.x, muzzle, c.main, 18, 320, 6);
     SFX.beam();
     G.shake = Math.max(G.shake, 8);
     p.cool = 0.42;
   } else {
     for (const off of [-11 * SHIP.scale, 11 * SHIP.scale]) {
-      G.bullets.push({ x:p.x+off, y:muzzle, vy: p.dirY*1150, r:5, dmg:8, owner:p.idx, pierce:false, color:c.main });
+      G.bullets.push({ x:p.x+off, y:muzzle, vx:0, vy: p.dirY*1150, r:5, dmg:8,
+                       owner:p.idx, pierce:false, color:c.main });
     }
     SFX.shot(p.idx);
     p.cool = 0.115;
@@ -867,8 +881,9 @@ function update(dt) {
   /* --- プレイヤー弾 --- */
   for (let i = G.bullets.length - 1; i >= 0; i--) {
     const b = G.bullets[i];
+    b.x += (b.vx || 0) * dt;
     b.y += b.vy * dt;
-    if (b.y < -40 || b.y > H + 40) { G.bullets.splice(i, 1); continue; }
+    if (b.y < -40 || b.y > H + 40 || b.x < -60 || b.x > W + 60) { G.bullets.splice(i, 1); continue; }
 
     // スターに当たったら回収
     let hitGem = false;
@@ -1378,16 +1393,21 @@ function star5(c, r) {
 }
 
 function drawBullet(b) {
+  // 斜めに飛ぶ弾もあるので、速度ベクトルに合わせて向きを決める
+  const ang = Math.atan2(b.vy, b.vx || 0);
   ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(ang);
   ctx.shadowColor = b.color; ctx.shadowBlur = b.pierce ? 30 : 12;
   ctx.fillStyle = b.color;
   if (b.pierce) {
+    const len = b.r * 4.5;
     ctx.globalAlpha = 0.9;
-    ctx.fillRect(b.x - b.r, Math.min(b.y, b.y + b.vy * 0.05), b.r * 2, Math.abs(b.vy * 0.05));
+    ctx.fillRect(-len, -b.r, len * 1.1, b.r * 2);
     ctx.fillStyle = '#fff';
-    ctx.fillRect(b.x - b.r * 0.35, Math.min(b.y, b.y + b.vy * 0.05), b.r * 0.7, Math.abs(b.vy * 0.05));
+    ctx.fillRect(-len, -b.r * 0.35, len * 1.1, b.r * 0.7);
   } else {
-    ctx.beginPath(); ctx.ellipse(b.x, b.y, b.r * 0.7, b.r * 2.2, 0, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, 0, b.r * 2.2, b.r * 0.7, 0, 0, TAU); ctx.fill();
   }
   ctx.restore();
 }

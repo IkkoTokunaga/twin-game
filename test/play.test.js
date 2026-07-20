@@ -47,11 +47,20 @@ check('畑が中央帯に収まる',
   const before = FIELD.grid.filter(Boolean).length;
   p.charge = p.maxCharge;
   playerShoot(p);                             // ビームを1発だけ撃つ
+  const beamCount = G.bullets.length;
+  const angs = G.bullets.map(b => Math.atan2(b.vx || 0, -b.vy * (p.bottom ? 1 : -1)));
+  check('扇状の内訳がまっすぐ1本＋斜め2本',
+        angs.filter(a => Math.abs(a) < 0.01).length === 1 &&
+        angs.filter(a => a < -0.05).length === 1 &&
+        angs.filter(a => a > 0.05).length === 1,
+        `角度=${angs.map(a => a.toFixed(2)).join(', ')}`);
   let guard = 0;
   while (G.bullets.length && guard++ < 600) { p.cool = 99; p.firing = false; update(1/60); }
   const broken = before - FIELD.grid.filter(Boolean).length;
-  check('強攻撃が壊すのは3ブロックまで', broken <= 3 && broken >= 1,
+  // まっすぐ(貫通3)＋斜め2本(貫通1ずつ) = 最大5
+  check('強攻撃が壊すのは5ブロックまで', broken <= 5 && broken >= 1,
         `壊した数=${broken} / 縦${FIELD.rows}列`);
+  check('強攻撃は3本の扇状で出る', beamCount === 3, `本数=${beamCount}`);
   check('強攻撃ではチャージが溜まらない', p.charge < p.maxCharge, `charge=${p.charge}`);
   G.bullets.length = 0;
   p.cool = 0;                                  // 検証用に伸ばした発射待ちを戻す
