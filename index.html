@@ -705,7 +705,9 @@ function playerShoot(p) {
   const muzzle = p.y + p.dirY * 20 * SHIP.scale;   // 機体の拡大に合わせて発射位置もずらす
   if (big) {
     p.charge = 0;
-    G.bullets.push({ x:p.x, y:muzzle, vy: p.dirY*1500, r:20, dmg:110, owner:p.idx, pierce:true, color:c.main });
+    // pierceLeft: 貫通できるブロック数。これが無いと一列を丸ごと消してしまう
+    G.bullets.push({ x:p.x, y:muzzle, vy: p.dirY*1500, r:20, dmg:110,
+                     owner:p.idx, pierce:true, pierceLeft:3, color:c.main });
     burst(p.x, muzzle, c.main, 18, 320, 6);
     SFX.beam();
     G.shake = Math.max(G.shake, 8);
@@ -794,10 +796,12 @@ function update(dt) {
     const blk = blockAt(c, r);
     if (blk) {
       const p = G.players[b.owner];
-      if (p) p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.5);
+      // 通常弾だけがチャージを溜める。ビームで溜まると撃ちっぱなしになる
+      if (p && !b.pierce) p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.22);
       damageBlock(c, r, b.dmg, b.owner);
       burst(b.x, b.y, b.color, b.pierce ? 8 : 4, b.pierce ? 220 : 130, b.pierce ? 5 : 3);
       if (!b.pierce) { G.bullets.splice(i, 1); continue; }
+      if (--b.pierceLeft <= 0) { G.bullets.splice(i, 1); continue; }   // 貫通しきったら消える
     }
   }
 
