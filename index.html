@@ -36,6 +36,7 @@ const cv  = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 
 let W = 0, H = 0, DPR = 1;
+let CELL = 0;                  // ブロック1個の一辺
 const Z = { top:{y0:0,y1:0}, bot:{y0:0,y1:0}, cy:0 };
 
 function resize() {
@@ -51,8 +52,12 @@ function resize() {
   cv.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-  Z.top.y0 = H * 0.10;  Z.top.y1 = H * 0.35;
-  Z.bot.y0 = H * 0.65;  Z.bot.y1 = H * 0.90;
+  // ブロック1個の高さ。畑の広さに関係なく常にこの寸法で敷く
+  CELL = (H * 0.63 - H * 0.37) / 5;
+
+  // 各プレイヤーの可動域は、その分だけブロック2段ぶん削って畑に明け渡す
+  Z.top.y0 = H * 0.10;  Z.top.y1 = H * 0.35 - CELL * 2;
+  Z.bot.y0 = H * 0.65 + CELL * 2;  Z.bot.y1 = H * 0.90;
   Z.cy = H / 2;
   // 全画面ボタンは中央帯の右端＝どちらのプレイヤーの操作エリアにも掛からない位置
   FS.btn.x = W - 36;
@@ -518,10 +523,12 @@ function cellCenter(c, r) {
 
 function makeField(stage) {
   const S = stageSetup(stage);
-  // ブロックの大きさは常にふたり用の中央帯を基準にして揃える
-  const duoY0 = Z.top.y1 + H * 0.012;
-  const duoY1 = Z.bot.y0 - H * 0.012;
-  const cell = Math.max(28, (duoY1 - duoY0) / S.rows);
+  // ブロックの寸法は画面サイズだけで決まる。段数は空いている高さから求める
+  // 陣地の縁に張り付いた機体の砲口が畑にめり込まないだけの間隔を空ける
+  const pad = 20 * SHIP.scale + 4;
+  const duoY0 = Z.top.y1 + pad;
+  const duoY1 = Z.bot.y0 - pad;
+  const cell = Math.max(28, CELL);
 
   // ひとり用では、2人目が使うはずだった上側の陣地まで畑を広げる
   const topY = G.solo ? Z.top.y0 : duoY0;

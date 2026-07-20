@@ -23,8 +23,12 @@ let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
 
 onDown(ev(1, MENU.duo.x + MENU.duo.w/2, MENU.duo.y + MENU.duo.h/2));   // ふたりで開始
-check('ブロック畑が生成される', FIELD.grid.length > 0 && FIELD.cols>3 && FIELD.rows===5,
+check('ブロック畑が生成される', FIELD.grid.length > 0 && FIELD.cols > 3 && FIELD.rows >= 5,
       `cols=${FIELD.cols} rows=${FIELD.rows} cell=${Math.round(FIELD.cell)}`);
+check('砲口が畑にめり込まない',
+      FIELD.y0 + FIELD.rows*FIELD.cell <= Z.bot.y0 - 20*1.8 &&
+      FIELD.y0 >= Z.top.y1 + 20*1.8,
+      `畑=${FIELD.y0.toFixed(0)}..${(FIELD.y0+FIELD.rows*FIELD.cell).toFixed(0)} 陣地=${Z.top.y1.toFixed(0)}/${Z.bot.y0.toFixed(0)}`);
 const total=FIELD.grid.filter(Boolean).length;
 check('スターが隠されている', G.starsTotal >= 2 && G.starsFound === 0, `total=${G.starsTotal}`);
 const starCells=FIELD.grid.filter(b=>b&&b.star).length;
@@ -237,8 +241,9 @@ check('畑が中央帯に収まる',
   check(`フリーズは${BLAST_STUN}秒で解除される`, p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
   // 撃ち始めるかどうかを見たいので、いったん弾を空にしてから数フレームだけ進める
   G.bullets.length = 0;
-  for (let i = 0; i < 10; i++) update(1/60);
-  check('解除後は指を置き直さずに撃てる', mine() > 0, `弾=${mine()}`);
+  let fired = 0;
+  for (let i = 0; i < 20; i++) { update(1/60); fired = Math.max(fired, mine()); }
+  check('解除後は指を置き直さずに撃てる', fired > 0, `弾=${fired}`);
   for (let i = 0; i < 60; i++) update(1/60);
   check('衝撃波は後片付けされる', G.blasts.length === 0, `blasts=${G.blasts.length}`);
   check('閃光も消える', G.flash === 0, `flash=${G.flash}`);

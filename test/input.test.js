@@ -236,10 +236,11 @@ for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = fals
   onMove(ev(40, 600, 1000));                      // 画面内へ戻す
   check('戻ってくると再開する（指を置き直さなくてよい）',
         p.firing === true && Math.abs(p.tx - held.x) > 1, `firing=${p.firing} tx=${p.tx}`);
+  // 弾はブロックに当たるとすぐ消えるので、瞬間値ではなく期間中の最大で見る
   G.bullets.length = 0;
-  for (let i = 0; i < 20; i++) update(1/60);
-  check('戻ってくると弾が出る', G.bullets.filter(b => b.owner === 0).length > 0,
-        `弾=${G.bullets.filter(b => b.owner === 0).length}`);
+  let fired = 0;
+  for (let i = 0; i < 20; i++) { update(1/60); fired = Math.max(fired, G.bullets.filter(b => b.owner === 0).length); }
+  check('戻ってくると弾が出る', fired > 0, `弾=${fired}`);
   onUp(ev(40, 600, 1000));
 }
 
