@@ -368,8 +368,20 @@ check('畑が中央帯に収まる',
   const shot = G.bullets.find(b => b.giant);
   check('威力は最大まで強化したビームと同じ', shot.dmg === BEAM_LEVELS[BEAM_LEVELS.length - 1].dmg,
         `威力=${shot.dmg}`);
+  const laserR = shot.r;
   for (let i = 0; i < 90; i++) update(1/60);     // 通り抜けるまで
   check('進路のブロックを全部貫通する', colBlocks() === 0, `残=${colBlocks()}段`);
+  // 太さぶん、隣の列も削れている
+  const colAt = (dx) => {
+    const cc = Math.floor((p.x + dx - FIELD.x0) / FIELD.cell);
+    let n = 0;
+    for (let r = 0; r < FIELD.rows; r++) if (FIELD.grid[idxAt(cc, r)]) n++;
+    return n;
+  };
+  check('太さぶん横の列も削れる', colAt(-laserR * 0.8) === 0 && colAt(laserR * 0.8) === 0,
+        `左=${colAt(-laserR * 0.8)} 右=${colAt(laserR * 0.8)}`);
+  check('太さは2ブロックぶん以上', laserR * 2 >= FIELD.cell * 1.8,
+        `太さ=${(laserR * 2).toFixed(0)}px ブロック=${FIELD.cell.toFixed(0)}px`);
   const afterAll = FIELD.grid.filter(Boolean).length;
   check('畑全体は消えない', afterAll > 0, `残=${afterAll} / ${beforeAll}`);
   console.log(`  参考: 巨大レーザーで${beforeAll - afterAll}個消滅（畑${beforeAll}個中）`);

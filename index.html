@@ -1130,6 +1130,23 @@ function update(dt) {
     // ブロックに当たったら削る
     const c = Math.floor((b.x - FIELD.x0) / FIELD.cell);
     const r = Math.floor((b.y - FIELD.y0) / FIELD.cell);
+    // 巨大レーザーは太いので、重なっている列をまとめて削る
+    if (b.giant) {
+      const cL = Math.floor((b.x - b.r - FIELD.x0) / FIELD.cell);
+      const cR = Math.floor((b.x + b.r - FIELD.x0) / FIELD.cell);
+      let center = 'none';
+      for (let cc = cL; cc <= cR; cc++) {
+        const res2 = damageBlock(cc, r, b.dmg, b.owner);
+        if (cc === c) center = res2;
+      }
+      if (center !== 'none') {
+        burst(b.x, b.y, b.color, 10, 240, 6);
+        // 正面が色つきブロックならそこで止まる（横に掠めた分は通り抜ける）
+        if (center === 'blocked') { G.bullets.splice(i, 1); continue; }
+      }
+      continue;
+    }
+
     const blk = blockAt(c, r);
     if (blk) {
       const res = damageBlock(c, r, b.dmg, b.owner);
@@ -1305,7 +1322,7 @@ function fireGiantLaser(p) {
   const muzzle = p.y + p.dirY * 20 * SHIP.scale;
   G.bullets.push({
     x: p.x, y: muzzle, vx: 0, vy: p.dirY * 1400,
-    r: 30, dmg: top.dmg, owner: p.idx,
+    r: 60, dmg: top.dmg, owner: p.idx,
     pierce: true, pierceLeft: Infinity, giant: true,
     color: P_COLORS[p.idx].main,
   });
