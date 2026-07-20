@@ -14,7 +14,8 @@
     -webkit-tap-highlight-color:transparent; overscroll-behavior:none;
     font-family:-apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   }
-  #cv { display:block; touch-action:none; }
+  #cv { display:block; position:fixed; inset:0; touch-action:none; }
+  html:fullscreen, body:fullscreen { width:100%; height:100%; }
 </style>
 </head>
 <body>
@@ -38,8 +39,11 @@ const Z = { top:{y0:0,y1:0}, bot:{y0:0,y1:0}, cy:0 };
 
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth;
-  H = window.innerHeight;
+  // 全画面移行直後は innerWidth/Height の更新が遅れる端末があるため
+  // visualViewport が使えるならそちらを優先する
+  const vv = window.visualViewport;
+  W = Math.round(vv ? vv.width  : window.innerWidth);
+  H = Math.round(vv ? vv.height : window.innerHeight);
   cv.width  = Math.round(W * DPR);
   cv.height = Math.round(H * DPR);
   cv.style.width  = W + 'px';
@@ -49,6 +53,9 @@ function resize() {
   Z.top.y0 = H * 0.06;  Z.top.y1 = H * 0.37;
   Z.bot.y0 = H * 0.63;  Z.bot.y1 = H * 0.94;
   Z.cy = H / 2;
+  // 全画面ボタンは中央帯の右端＝どちらのプレイヤーの操作エリアにも掛からない位置
+  FS.btn.x = W - 36;
+  FS.btn.y = Z.cy;
 
   makeStars();
   for (const p of G.players) clampPlayer(p);
@@ -56,6 +63,48 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+
+/* ---------------- 全画面 ---------------- */
+const FS = {
+  supported: !!(document.documentElement.requestFullscreen ||
+                document.documentElement.webkitRequestFullscreen),
+  btn: { x:0, y:0, r:26 },
+};
+
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function enterFullscreen() {
+  const el = document.documentElement;
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!fn) return;
+  try {
+    // ブラウザによっては Promise を返さないので包んで握り潰す
+    Promise.resolve(fn.call(el, { navigationUI: 'hide' })).then(lockOrientation, () => {});
+  } catch (_) { /* ユーザー操作外の呼び出しなどは無視 */ }
+}
+
+function exitFullscreen() {
+  const fn = document.exitFullscreen || document.webkitExitFullscreen;
+  if (!fn) return;
+  try { Promise.resolve(fn.call(document)).catch(() => {}); } catch (_) {}
+}
+
+function toggleFullscreen() { isFullscreen() ? exitFullscreen() : enterFullscreen(); }
+
+function lockOrientation() {
+  // 対応端末でのみ縦向き固定（非対応でも例外を出さない）
+  try {
+    const so = screen.orientation;
+    if (so && so.lock) Promise.resolve(so.lock('portrait')).catch(() => {});
+  } catch (_) {}
+}
+
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(ev, () => { resize(); setTimeout(resize, 120); });
+}
 
 /* ---------------- utils ---------------- */
 const rand  = (a, b) => a + Math.random() * (b - a);
@@ -157,7 +206,18 @@ function playerForY(y) { return y > Z.cy ? 0 : 1; }
 
 function onDown(e) {
   e.preventDefault();
-  if (G.mode === 'title') { resetGame(); G.mode = 'play'; return; }
+
+  // 全画面ボタンは最優先で判定（機体の移動・射撃には渡さない）
+  if (FS.supported) {
+    const dx = e.clientX - FS.btn.x, dy = e.clientY - FS.btn.y, hit = FS.btn.r + 10;
+    if (dx * dx + dy * dy < hit * hit) { toggleFullscreen(); return; }
+  }
+
+  if (G.mode === 'title') {
+    // 最初のタップ＝ユーザー操作なので、ここでしか全画面には入れない
+    if (FS.supported && !isFullscreen()) enterFullscreen();
+    resetGame(); G.mode = 'play'; return;
+  }
   if (G.mode === 'over') { if (G.overT > 0.8) { resetGame(); G.mode = 'play'; } return; }
 
   const idx = playerForY(e.clientY);
@@ -428,6 +488,7 @@ function draw() {
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'over')  drawOver();
   if (G.banner) drawBanner(G.banner);
+  drawFsButton();   // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
 }
 
 function drawArena() {
@@ -572,6 +633,36 @@ function drawEBullet(e) {
   ctx.restore();
 }
 
+function drawFsButton() {
+  if (!FS.supported) return;
+  const b = FS.btn, full = isFullscreen();
+  ctx.save();
+  ctx.translate(b.x, b.y);
+
+  ctx.globalAlpha = G.mode === 'play' ? 0.35 : 0.75;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.arc(0, 0, b.r, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, b.r, 0, TAU); ctx.stroke();
+
+  // 全画面=外向きの隅アイコン / 解除=内向き
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  // 全画面へ: 外側の四隅に枠 / 解除: 中央寄りの隅から外へ伸びる
+  const o = full ? 4 : 11, len = 7, inward = full ? -1 : 1;
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const cx = sx * o, cy = sy * o;
+    ctx.beginPath();
+    ctx.moveTo(cx - sx * len * inward, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy - sy * len * inward);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawParts() {
   ctx.save();
   for (const p of G.parts) {
@@ -666,11 +757,14 @@ function drawTitle() {
     ctx.fillText('ダメージでチャージが溜まると自動で貫通ビーム', 0, 30);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 54);
+    ctx.fillText(FS.supported
+      ? 'タップで全画面になります（右端のボタンでいつでも切替）'
+      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 74);
 
     ctx.fillStyle = '#fff';
     ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
     ctx.font = '800 20px system-ui, sans-serif';
-    ctx.fillText('TAP TO START', 0, 92);
+    ctx.fillText('TAP TO START', 0, 110);
     ctx.restore();
   }
   ctx.restore();
