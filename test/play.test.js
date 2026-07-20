@@ -42,7 +42,8 @@ check('畑が中央帯に収まる',
   const col = Math.floor(FIELD.cols / 2);
   const cx = FIELD.x0 + (col + 0.5) * FIELD.cell;
   p.x = p.tx = cx; p.y = p.ty = 900;
-  for (const b of FIELD.grid) if (b) b.star = false;   // 星の回収報酬と混ざらないようにする
+  // ビーム単体の威力だけを見たいので、星とばくだん（連鎖爆発）を取り除く
+  for (const b of FIELD.grid) if (b) { b.star = false; b.type = 0; b.hp = b.maxHp = 24; }
   const before = FIELD.grid.filter(Boolean).length;
   p.charge = p.maxCharge;
   playerShoot(p);                             // ビームを1発だけ撃つ
@@ -60,7 +61,7 @@ check('畑が中央帯に収まる',
 
 // 2人で掘り進める
 onDown(ev(2,400,200));
-let frames=0, cleared=0, maxStage=1;
+let frames=0, cleared=0, maxStage=1, chipSeen=0, bugSeen=0;
 for(let i=0;i<60*180;i++){                    // 3分ぶん
   frames++;
   const x=26+ (i*9)%(800-52);
@@ -68,6 +69,8 @@ for(let i=0;i<60*180;i++){                    // 3分ぶん
   onMove(ev(2,800-x,300-(i%200)));
   update(1/60); draw();
   if(G.stage>maxStage){maxStage=G.stage; cleared++;}
+  chipSeen=Math.max(chipSeen,G.chips.length);
+  bugSeen=Math.max(bugSeen,G.bugs.length);
   if(G.stage>=4) break;
 }
 check('ブロックが掘れている', G.players[0].dug+G.players[1].dug > 20,
@@ -81,6 +84,11 @@ check('スターの取りこぼしがない', G.starsFound<=G.starsTotal, `${G.s
 check('畑が機体の可動範囲に収まる',
       FIELD.x0 >= 20*1.8-0.01 && FIELD.x0+FIELD.cols*FIELD.cell <= 800-20*1.8+0.01,
       `x0=${FIELD.x0.toFixed(1)} x1=${(FIELD.x0+FIELD.cols*FIELD.cell).toFixed(1)}`);
+check('かけらが落ちてくる', chipSeen > 0, `観測=${chipSeen}`);
+check('かけらを受け止められる', G.players[0].caught + G.players[1].caught > 0,
+      `P1=${G.players[0].caught} P2=${G.players[1].caught}`);
+check('おじゃまむしが出る', bugSeen > 0, `観測=${bugSeen}`);
+check('おじゃまむしは倒せる/消える', G.bugs.length < 12, `残=${G.bugs.length}`);
 check('弾が無限に溜まらない', G.bullets.length<200, `bullets=${G.bullets.length}`);
 check('粒子が無限に溜まらない', G.parts.length<2000, `parts=${G.parts.length}`);
 console.log(`\n  参考: ${(frames/60).toFixed(1)}秒でステージ${maxStage}到達 / スコア${G.score} / 掘った数 P1=${G.players[0].dug} P2=${G.players[1].dug}`);
