@@ -421,13 +421,19 @@ function makePlayer(idx) {
   };
 }
 
-function clampPlayer(p) {
-  const z = p.bottom ? Z.bot : Z.top;
+// 機体が動ける矩形。判定と枠の表示を必ず同じ値から導くための唯一の定義。
+function zoneRect(bottom) {
+  const z = bottom ? Z.bot : Z.top;
   const m = 20 * SHIP.scale;             // 機体が画面端からはみ出さない余白
-  p.x = clamp(p.x, m, W - m);
-  p.y = clamp(p.y, z.y0, z.y1);
-  p.tx = clamp(p.tx, m, W - m);
-  p.ty = clamp(p.ty, z.y0, z.y1);
+  return { x0: m, y0: z.y0, x1: W - m, y1: z.y1 };
+}
+
+function clampPlayer(p) {
+  const r = zoneRect(p.bottom);
+  p.x  = clamp(p.x,  r.x0, r.x1);
+  p.y  = clamp(p.y,  r.y0, r.y1);
+  p.tx = clamp(p.tx, r.x0, r.x1);
+  p.ty = clamp(p.ty, r.y0, r.y1);
 }
 
 /* 指の位置から機体の目標位置を決める。
@@ -451,9 +457,9 @@ function aimFromFinger(p, cx, cy) {
   const t  = f1 > f0 ? clamp((cy - f0) / (f1 - f0), 0, 1) : 0;
   p.ty = z.y0 + t * (z.y1 - z.y0);
 
-  const m  = 20 * SHIP.scale;
+  const rc = zoneRect(p.bottom);
   const u  = clamp((cx - SHIP.edgeX) / Math.max(1, W - SHIP.edgeX * 2), 0, 1);
-  p.tx = m + u * (W - m * 2);
+  p.tx = rc.x0 + u * (rc.x1 - rc.x0);
 
   clampPlayer(p);
 }
@@ -1084,14 +1090,39 @@ function drawArena() {
   }
   ctx.setLineDash([]);
 
-  // 各プレイヤーの操作可能ゾーン枠
+  // 各プレイヤーの可動域。枠の線がそのまま機体の動ける範囲を示す
   for (let i = 0; i < 2; i++) {
-    const z = i === 0 ? Z.bot : Z.top;
-    ctx.strokeStyle = P_COLORS[i].main;
-    ctx.globalAlpha = 0.14;
+    const r = zoneRect(i === 0);
+    const pad = 14;                                   // 機体の見た目ぶんだけ外へ広げる
+    const x = r.x0 - pad, y = r.y0 - pad;
+    const w = (r.x1 - r.x0) + pad * 2, h = (r.y1 - r.y0) + pad * 2;
+    const col = P_COLORS[i].main;
+
+    ctx.fillStyle = col;                              // ごく薄い塗りで領域を示す
+    ctx.globalAlpha = 0.05;
+    roundRect(ctx, x, y, w, h, 16); ctx.fill();
+
+    ctx.strokeStyle = col;                            // 破線の枠
+    ctx.globalAlpha = 0.34;
     ctx.lineWidth = 2;
-    roundRect(ctx, 14, z.y0 - 12, W - 28, (z.y1 - z.y0) + 24, 18);
-    ctx.stroke();
+    ctx.setLineDash([10, 8]);
+    roundRect(ctx, x, y, w, h, 16); ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.globalAlpha = 0.85;                           // 四隅は太い実線で強調
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    const L = Math.min(34, w * 0.22, h * 0.32);
+    for (const sx of [0, 1]) for (const sy of [0, 1]) {
+      const cx = sx ? x + w : x, cy = sy ? y + h : y;
+      const dx = sx ? -1 : 1,   dy = sy ? -1 : 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * L, cy);
+      ctx.lineTo(cx + dx * 12, cy);
+      ctx.quadraticCurveTo(cx, cy, cx, cy + dy * 12);
+      ctx.lineTo(cx, cy + dy * L);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   }
   ctx.restore();

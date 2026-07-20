@@ -29,8 +29,8 @@ global.performance = { now: () => Date.now() };
 global.requestAnimationFrame = noop;
 global.setTimeout = noop;
 
-const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect,PAUSE};')();
-const { onDown, onMove, onUp, update, G, pointers, Z, updateRect, PAUSE } = api;
+const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect,PAUSE,zoneRect};')();
+const { onDown, onMove, onUp, update, G, pointers, Z, updateRect, PAUSE, zoneRect } = api;
 
 const ev = (id, x, y) => ({ pointerId:id, clientX:x, clientY:y, preventDefault:noop });
 const BOT = 1000, TOP = 200;   // 画面高1200 → 中央600
@@ -201,6 +201,34 @@ onDown(ev(30, PAUSE.btn.x, PAUSE.btn.y));
 check('ポーズボタンで止まる', G.mode === 'pause' && !pointers.has(30), `mode=${G.mode}`);
 onDown(ev(31, PAUSE.btn.x, PAUSE.btn.y));
 check('ポーズボタンで再開する', G.mode === 'play' && !pointers.has(31), `mode=${G.mode}`);
+
+// --- 表示される枠と、実際に動ける範囲が一致する ---
+pointers.clear();
+for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
+for (const idx of [0, 1]) {
+  const p = G.players[idx], r = zoneRect(idx === 0);
+  const corners = [];
+  // 指を四隅いっぱいに動かして、機体が枠の四隅に届くか
+  for (const fx of [0, 800]) {
+    // 中央線ちょうど(600)は上側の担当になるので、下側は601から
+    for (const fy of (idx === 0 ? [601, 1200] : [0, 599])) {
+      const id = 700 + corners.length;
+      onDown(ev(id, fx, fy));
+      corners.push({ x: p.tx, y: p.ty });
+      onUp(ev(id, fx, fy));
+    }
+  }
+  const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
+  check(`P${idx + 1}: 機体が枠の左右端まで届く`,
+        Math.abs(Math.min(...xs) - r.x0) < 0.01 && Math.abs(Math.max(...xs) - r.x1) < 0.01,
+        `x=${Math.min(...xs).toFixed(1)}..${Math.max(...xs).toFixed(1)} 枠=${r.x0.toFixed(1)}..${r.x1.toFixed(1)}`);
+  check(`P${idx + 1}: 機体が枠の上下端まで届く`,
+        Math.abs(Math.min(...ys) - r.y0) < 0.01 && Math.abs(Math.max(...ys) - r.y1) < 0.01,
+        `y=${Math.min(...ys).toFixed(1)}..${Math.max(...ys).toFixed(1)} 枠=${r.y0.toFixed(1)}..${r.y1.toFixed(1)}`);
+  check(`P${idx + 1}: 枠の外へは出られない`,
+        corners.every(c => c.x >= r.x0 - 0.01 && c.x <= r.x1 + 0.01 &&
+                           c.y >= r.y0 - 0.01 && c.y <= r.y1 + 0.01), '');
+}
 
 console.log(fail === 0 ? '\n=== 全テスト通過 ===' : `\n=== ${fail}件 失敗 ===`);
 process.exit(fail ? 1 : 0);
