@@ -1070,7 +1070,9 @@ function update(dt) {
     if (G.nextT <= 0) {
       G.nextT = 0;
       G.stage++;
-      G.bullets.length = 0; G.chips.length = 0; G.bugs.length = 0;
+      G.bullets.length = 0; G.bugs.length = 0;
+      // 強化のかけらは持ち越す（落ちてくる途中でステージが変わっても損しないように）
+      G.chips = G.chips.filter(ch => ch.power);
       G.blasts.length = 0; G.flash = 0;
       makeField(G.stage);
       const debut = Object.keys(BLOCK_DEBUT).find(t => BLOCK_DEBUT[t] === G.stage);

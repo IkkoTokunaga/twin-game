@@ -401,6 +401,42 @@ check('畑が中央帯に収まる',
   onDown(ev(1,400,1000)); onDown(ev(2,400,200));
 }
 
+// --- 強化のかけらはステージをまたいでも消えない ---
+{
+  resetGame(false);
+  G.mode = 'play';
+  const p = G.players[0];
+  G.chips.length = 0;
+  G.chips.push({ x: 300, y: Z.cy, vx: 0, vy: 20, side: 0, t: 0, power: true, kind: 'beam' });
+  G.chips.push({ x: 320, y: Z.cy, vx: 0, vy: 20, side: 0, t: 0 });   // ふつうのかけら
+  const stage = G.stage;
+
+  // ステージクリアから次のステージ開始まで進める
+  G.starsTotal = 1; G.starsFound = 0;
+  const gem = { x: 400, y: Z.cy, r: 20, t: 0, taken: false, life: 1, owner: 0 };
+  G.gems.push(gem);
+  collectGem(gem, 0);
+  for (let i = 0; i < 60 * 4 && G.stage === stage; i++) update(1/60);
+
+  check('ステージが進んだ', G.stage === stage + 1, `stage=${G.stage}`);
+  check('強化のかけらは持ち越される',
+        G.chips.filter(c => c.power).length === 1, `かけら=${G.chips.filter(c => c.power).length}`);
+  check('ふつうのかけらは持ち越さない',
+        G.chips.filter(c => !c.power).length === 0, `ふつう=${G.chips.filter(c => !c.power).length}`);
+
+  // 持ち越したかけらはちゃんと拾える
+  const kept = G.chips.find(c => c.power);
+  p.beam = 0; p.shot = 0;
+  kept.x = p.x; kept.y = p.y;
+  update(1/60);
+  check('持ち越したかけらは拾える', p.beam === 1 || p.shot === 1,
+        `beam=${p.beam} shot=${p.shot}`);
+
+  G.chips.length = 0;
+  resetGame(false);
+  onDown(ev(1,400,1000)); onDown(ev(2,400,200));
+}
+
 // --- 10ステージごとのお祝い演出 ---
 {
   const clearStage = (n) => {                    // ステージnをクリアした状態を作る
