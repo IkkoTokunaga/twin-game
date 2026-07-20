@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
@@ -57,6 +57,60 @@ check('畑が中央帯に収まる',
   p.cool = 0;                                  // 検証用に伸ばした発射待ちを戻す
   onDown(ev(1,400,1000));
   makeField(G.stage);                          // 星を消した畑を作り直す
+}
+
+// --- どの★も必ずどちらかのプレイヤーが到達できる（詰みが無い） ---
+{
+  let bad = 0, checked = 0;
+  for (let trial = 0; trial < 300; trial++) {
+    makeField(1 + (trial % 8));                       // 色つきの割合が高いステージも含める
+    for (let r = 0; r < FIELD.rows; r++) {
+      for (let c = 0; c < FIELD.cols; c++) {
+        const b = FIELD.grid[idxAt(c, r)];
+        if (!b || !b.star) continue;
+        checked++;
+        // 下からP1が掘れるか（経路に赤ブロックが無いか）
+        let okBottom = b.type !== B_LOCK1;
+        for (let rr = r + 1; rr < FIELD.rows && okBottom; rr++) {
+          const n = FIELD.grid[idxAt(c, rr)];
+          if (n && n.type === B_LOCK1) okBottom = false;
+        }
+        // 上からP2が掘れるか（経路に青ブロックが無いか）
+        let okTop = b.type !== B_LOCK0;
+        for (let rr = r - 1; rr >= 0 && okTop; rr--) {
+          const n = FIELD.grid[idxAt(c, rr)];
+          if (n && n.type === B_LOCK0) okTop = false;
+        }
+        if (!okBottom && !okTop) bad++;
+      }
+    }
+  }
+  check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
+  makeField(G.stage);
+}
+
+// --- 色つきブロックは持ち主しか壊せない ---
+{
+  // 直前のテストで壊れている場合もあるので、必ず作り直す
+  const set=(t)=>{ const b={type:t,hp:24,maxHp:24,star:false,flash:0}; FIELD.grid[idxAt(0,0)]=b; return b; };
+
+  let b=set(B_LOCK0);
+  check('青ブロックは赤プレイヤーの弾を弾く', damageBlock(0,0,999,1)==='blocked' && FIELD.grid[idxAt(0,0)]===b);
+  check('弾かれた時はHPも減らない', b.hp===24, `hp=${b.hp}`);
+  check('青ブロックは青プレイヤーが壊せる', damageBlock(0,0,999,0)==='hit' && FIELD.grid[idxAt(0,0)]===null);
+
+  b=set(B_LOCK1);
+  check('赤ブロックは青プレイヤーの弾を弾く', damageBlock(0,0,999,0)==='blocked' && FIELD.grid[idxAt(0,0)]===b);
+  check('赤ブロックは赤プレイヤーが壊せる', damageBlock(0,0,999,1)==='hit' && FIELD.grid[idxAt(0,0)]===null);
+
+  // 弾かれてもチャージは溜まらない
+  const p=G.players[0];
+  set(B_LOCK1); p.charge=0;
+  G.bullets.length=0;
+  G.bullets.push({x:FIELD.x0+FIELD.cell*0.5, y:FIELD.y0+FIELD.cell*0.5, vy:-1, r:5, dmg:8, owner:0, pierce:false, color:'#fff'});
+  update(1/60);
+  check('色違いに当ててもチャージは増えない', p.charge===0, `charge=${p.charge}`);
+  makeField(G.stage);
 }
 
 // 2人で掘り進める

@@ -281,6 +281,9 @@ const SFX = {
       tone({ f:880, f2:1320, type:'triangle', dur:0.12, vol:0.15 });
     });
   },
+  locked() {                                     // 色が違って弾かれた
+    throttled('locked', 110, () => tone({ f:330, f2:250, type:'square', dur:0.09, vol:0.09 }));
+  },
   bugOut() { tone({ f:300, f2:520, type:'sawtooth', dur:0.18, vol:0.10 }); },
   bugHit() {
     noiseBurst({ f:1600, f2:300, dur:0.2, vol:0.2 });
@@ -341,6 +344,7 @@ function stageSetup(n) {
     hardRate: Math.min(0.05 + (n - 1) * 0.05, 0.30),   // かたいブロックの割合
     bombRate: Math.min(0.03 + (n - 1) * 0.02, 0.12),   // ばくだんブロックの割合
     rows: 5,
+    lockRate: Math.min(0.07 + (n - 1) * 0.02, 0.14), // 色つきブロックの割合（各色ごと）
     bugEvery: Math.max(3.2, 7.5 - (n - 1) * 0.6),   // おじゃまむしの出る間隔（秒）
   };
 }
@@ -460,6 +464,9 @@ function aimFromFinger(p, cx, cy) {
    スターを隠す。プレイヤーは上下から掘り進めてスターを探す。
 ============================================================ */
 const B_NORMAL = 0, B_HARD = 1, B_BOMB = 2;
+// 色つきブロックは対応するプレイヤーしか壊せない（B_LOCK0=下の青 / B_LOCK1=上の赤）
+const B_LOCK0 = 3, B_LOCK1 = 4;
+const lockOwner = (t) => t === B_LOCK0 ? 0 : (t === B_LOCK1 ? 1 : -1);
 const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[] };
 
 function idxAt(c, r) { return r * FIELD.cols + c; }
@@ -487,16 +494,19 @@ function makeField(stage) {
   FIELD.y0 = bandY0;
   FIELD.grid = new Array(cols * S.rows);
 
+  const tHard = S.hardRate;
+  const tBomb = tHard + S.bombRate;
+  const tL0   = tBomb + S.lockRate;
+  const tL1   = tL0 + S.lockRate;
   for (let i = 0; i < FIELD.grid.length; i++) {
     const rnd = Math.random();
-    const type = rnd < S.hardRate ? B_HARD : (rnd < S.hardRate + S.bombRate ? B_BOMB : B_NORMAL);
-    FIELD.grid[i] = {
-      type,
-      hp: type === B_HARD ? 70 : 24,
-      maxHp: type === B_HARD ? 70 : 24,
-      star: false,
-      flash: 0,
-    };
+    let type = B_NORMAL;
+    if      (rnd < tHard) type = B_HARD;
+    else if (rnd < tBomb) type = B_BOMB;
+    else if (rnd < tL0)   type = B_LOCK0;
+    else if (rnd < tL1)   type = B_LOCK1;
+    const hp = type === B_HARD ? 70 : 24;
+    FIELD.grid[i] = { type, hp, maxHp: hp, star: false, flash: 0 };
   }
 
   // スターを重複なく隠す。上下の端の列は序盤で当たりやすいので避ける
@@ -514,8 +524,33 @@ function makeField(stage) {
     pool.splice(k, 1);
     placed++;
   }
+  ensureReachable();
   G.starsTotal = placed;
   G.starsFound = 0;
+}
+
+// ★ごとに、少なくとも片方のプレイヤーが必ず掘り着けるようにする。
+// ★の下に赤、上に青が挟まると誰も到達できず詰むため、
+// 選んだ側から★までの経路にある「相手の色」のブロックを普通のブロックに戻す。
+function ensureReachable() {
+  for (let r = 0; r < FIELD.rows; r++) {
+    for (let c = 0; c < FIELD.cols; c++) {
+      const b = FIELD.grid[idxAt(c, r)];
+      if (!b || !b.star) continue;
+
+      const side = Math.random() < 0.5 ? 0 : 1;      // 0=下から / 1=上から
+      const blocker = side === 0 ? B_LOCK1 : B_LOCK0;
+
+      if (b.type === blocker) { b.type = B_NORMAL; b.hp = b.maxHp = 24; }
+
+      const from = side === 0 ? r + 1 : 0;
+      const to   = side === 0 ? FIELD.rows - 1 : r - 1;
+      for (let rr = from; rr <= to; rr++) {
+        const n = FIELD.grid[idxAt(c, rr)];
+        if (n && n.type === blocker) { n.type = B_NORMAL; n.hp = n.maxHp = 24; }
+      }
+    }
+  }
 }
 
 // ブロックを壊す。スター入りならスターを出し、ばくだんなら周囲を巻き込む
@@ -533,7 +568,10 @@ function breakBlock(c, r, ownerIdx, depth) {
     burst(pos.x, pos.y, '#ff8a3c', 26, 340, 7);
     if ((depth || 0) < 3) {
       for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
-        if (dc || dr) breakBlock(c + dc, r + dr, ownerIdx, (depth || 0) + 1);
+        if (!dc && !dr) continue;
+        const n = blockAt(c + dc, r + dr);
+        if (!n || lockOwner(n.type) >= 0) continue;   // 色つきは爆発でも壊れない
+        breakBlock(c + dc, r + dr, ownerIdx, (depth || 0) + 1);
       }
     }
   } else {
@@ -572,14 +610,25 @@ function breakBlock(c, r, ownerIdx, depth) {
   }
 }
 
+// 戻り値: 'none' 当たらなかった / 'blocked' 色違いで弾かれた / 'hit' 削れた
 function damageBlock(c, r, dmg, ownerIdx) {
   const b = blockAt(c, r);
-  if (!b) return false;
+  if (!b) return 'none';
+
+  const owner = lockOwner(b.type);
+  if (owner >= 0 && owner !== ownerIdx) {     // 色が違うプレイヤーの弾は通らない
+    b.flash = 1;
+    SFX.locked();
+    const pos = cellCenter(c, r);
+    burst(pos.x, pos.y, P_COLORS[owner].main, 5, 110, 3);
+    return 'blocked';
+  }
+
   b.hp -= dmg;
   b.flash = 1;
   if (b.hp <= 0) breakBlock(c, r, ownerIdx, 0);
   else SFX.blockHit();
-  return true;
+  return 'hit';
 }
 
 function resetGame() {
@@ -849,10 +898,12 @@ function update(dt) {
     const r = Math.floor((b.y - FIELD.y0) / FIELD.cell);
     const blk = blockAt(c, r);
     if (blk) {
+      const res = damageBlock(c, r, b.dmg, b.owner);
       const p = G.players[b.owner];
-      // 通常弾だけがチャージを溜める。ビームで溜まると撃ちっぱなしになる
-      if (p && !b.pierce) p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.22);
-      damageBlock(c, r, b.dmg, b.owner);
+      // 通常弾が実際に削れた時だけチャージが溜まる
+      if (p && !b.pierce && res === 'hit') {
+        p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.22);
+      }
       burst(b.x, b.y, b.color, b.pierce ? 8 : 4, b.pierce ? 220 : 130, b.pierce ? 5 : 3);
       if (!b.pierce) { G.bullets.splice(i, 1); continue; }
       if (--b.pierceLeft <= 0) { G.bullets.splice(i, 1); continue; }   // 貫通しきったら消える
@@ -1120,9 +1171,11 @@ function drawField() {
       const wear = b.hp / b.maxHp;             // 削れるほど暗く小さくなる
 
       let base, edge;
-      if (b.type === B_HARD)      { base = '#8992a6'; edge = '#c3ccdb'; }
-      else if (b.type === B_BOMB) { base = '#9c3140'; edge = '#ff7d6b'; }
-      else                        { base = '#2f5f9e'; edge = '#7fb2ff'; }
+      if (b.type === B_HARD)       { base = '#8992a6'; edge = '#c3ccdb'; }
+      else if (b.type === B_BOMB)  { base = '#5a4a52'; edge = '#b9a6ae'; }
+      else if (b.type === B_LOCK0) { base = '#12688a'; edge = P_COLORS[0].main; }
+      else if (b.type === B_LOCK1) { base = '#8a2764'; edge = P_COLORS[1].main; }
+      else                         { base = '#2f5f9e'; edge = '#7fb2ff'; }
 
       ctx.globalAlpha = 0.45 + 0.55 * wear;
       ctx.fillStyle = b.flash > 0 ? '#ffffff' : base;
@@ -1135,10 +1188,10 @@ function drawField() {
       roundRect(ctx, x + pad, y + pad, w, w, cell * 0.16);
       ctx.stroke();
 
-      if (b.type === B_BOMB) {                 // ばくだんは一目で分かるように
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = '#ffd7cf';
-        ctx.beginPath(); ctx.arc(x + cell / 2, y + cell / 2, cell * 0.13, 0, TAU); ctx.fill();
+      if (b.type === B_BOMB) {                 // 爆弾の絵柄
+        drawBombIcon(x + cell / 2, y + cell / 2, cell);
+      } else if (b.type === B_LOCK0 || b.type === B_LOCK1) {
+        drawLockIcon(x + cell / 2, y + cell / 2, cell, lockOwner(b.type));
       } else if (b.type === B_HARD) {          // かたいブロックは鋲を打つ
         ctx.globalAlpha = 0.8;
         ctx.fillStyle = edge;
@@ -1151,6 +1204,52 @@ function drawField() {
       ctx.globalAlpha = 1;
     }
   }
+  ctx.restore();
+}
+
+// 爆弾の絵柄（丸い本体＋導火線＋火花）
+function drawBombIcon(cx, cy, cell) {
+  const r = cell * 0.20;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.translate(cx, cy + r * 0.18);
+
+  ctx.fillStyle = '#15111a';                       // 本体
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';        // つや
+  ctx.beginPath(); ctx.arc(-r * 0.34, -r * 0.36, r * 0.24, 0, TAU); ctx.fill();
+
+  ctx.fillStyle = '#15111a';                       // 口金
+  ctx.fillRect(-r * 0.30, -r * 1.22, r * 0.60, r * 0.42);
+
+  ctx.strokeStyle = '#d8b070';                     // 導火線
+  ctx.lineWidth = Math.max(1.6, r * 0.16);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 1.2);
+  ctx.quadraticCurveTo(r * 0.75, -r * 1.75, r * 0.5, -r * 2.15);
+  ctx.stroke();
+
+  const tw = 0.6 + 0.4 * Math.sin(G.t * 14 + cx);  // 火花
+  ctx.fillStyle = '#ffd54a';
+  ctx.shadowColor = '#ff9a3c'; ctx.shadowBlur = 12 * tw;
+  ctx.beginPath(); ctx.arc(r * 0.5, -r * 2.25, r * 0.28 * tw, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// 色つきブロックには、その色のプレイヤーの機体を描いて誰が壊せるか示す
+function drawLockIcon(cx, cy, cell, owner) {
+  const r = cell * 0.22;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.translate(cx, cy);
+  ctx.scale(1, owner === 0 ? 1 : -1);              // 下の人は上向き、上の人は下向き
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = P_COLORS[owner].glow; ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.moveTo(0, -r); ctx.lineTo(r * 0.78, r * 0.62); ctx.lineTo(0, r * 0.24);
+  ctx.lineTo(-r * 0.78, r * 0.62);
+  ctx.closePath(); ctx.fill();
   ctx.restore();
 }
 
@@ -1446,16 +1545,17 @@ function drawTitle() {
     ctx.fillText('自分のエリアを指でなぞって移動 / さわっている間は連射', 0, 28);
     ctx.fillText('★ の近くを掘ると光の粒が出ます', 0, 50);
     ctx.fillText('◆ かけらは受け止めるとチャージ / むしに当たると少し動けない', 0, 72);
+    ctx.fillText('色つきブロックは、その色のプレイヤーだけが壊せます', 0, 94);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 96);
+    ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 118);
     ctx.fillText(FS.supported
       ? 'タップで全画面になります（右端のボタンでいつでも切替）'
-      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 118);
+      : 'ブラウザの「ホーム画面に追加」から起動すると全画面になります', 0, 140);
 
     ctx.fillStyle = '#fff';
     ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
     ctx.font = '800 20px system-ui, sans-serif';
-    ctx.fillText('TAP TO START', 0, 158);
+    ctx.fillText('TAP TO START', 0, 180);
     ctx.restore();
   }
   ctx.restore();
