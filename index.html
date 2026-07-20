@@ -398,12 +398,19 @@ function stageSetup(n) {
    ◆かけらを一定数あつめると強化アイテムが落ちてくる。
 ============================================================ */
 const CHIPS_PER_POWER = 5;          // 何個あつめたら強化アイテムが出るか
-const BEAM_LEVELS = [
+const BEAM_LEVELS = [          // 強攻撃（まっすぐ貫くビーム）
   { r: 20, dmg: 110, pierce: 3 },
   { r: 25, dmg: 145, pierce: 4 },
   { r: 30, dmg: 180, pierce: 5 },
   { r: 36, dmg: 230, pierce: 7 },
 ];
+const SHOT_LEVELS = [          // 通常攻撃（扇状）
+  { n: 3, spread: 0.15, dmg: 8,  cool: 0.115, r: 5.0 },
+  { n: 5, spread: 0.18, dmg: 9,  cool: 0.108, r: 5.5 },
+  { n: 5, spread: 0.24, dmg: 11, cool: 0.100, r: 6.0 },
+  { n: 7, spread: 0.30, dmg: 13, cool: 0.092, r: 6.5 },
+];
+const POWER_KINDS = ['beam', 'shot'];
 
 /* ---------------- 自機のサイズと指との位置関係 ---------------- */
 const SHIP = {
@@ -476,7 +483,9 @@ function makePlayer(idx) {
     stun: 0,                             // おじゃまむしに触れると少しの間うごけない
     outside: false,                      // 指が画面の外にある間は停止する
     caught: 0,                           // 拾ったかけらの数
-    beam: 0,                             // ビームの強化段階（BEAM_LEVELS の添字）
+    beam: 0,                             // 強攻撃の強化段階（BEAM_LEVELS の添字）
+    shot: 0,                             // 通常攻撃の強化段階（SHOT_LEVELS の添字）
+    powers: 0,                           // 受け取った強化アイテムの数（種類の振り分けに使う）
     firing: false,
     pointer: -1,
     stack: [],                           // その側に触れている指（最初の1本が操作中）
@@ -701,10 +710,16 @@ function hurtPlayer(p, stunTime) {
   if (wasStunned) return;
 
   SFX.stun();
-  if (p.beam > 0) {
-    p.beam--;
+  // 高く育っている方を1段階だけ削る
+  if (p.beam > 0 || p.shot > 0) {
+    const hitBeam = p.beam >= p.shot;
+    if (hitBeam) p.beam--; else p.shot--;
     SFX.powerDown();
-    G.banner = { text: `ビームが よわくなった… Lv${p.beam + 1}`, life: 1.5 };
+    G.banner = {
+      text: hitBeam ? `ビームが よわくなった… Lv${p.beam + 1}`
+                    : `ショットが よわくなった… Lv${p.shot + 1}`,
+      life: 1.5,
+    };
     burst(p.x, p.y, '#9aa4b8', 22, 260, 6);
   }
 }
@@ -970,19 +985,21 @@ function playerShoot(p) {
     G.shake = Math.max(G.shake, 8);
     p.cool = 0.42;
   } else {
-    // 通常攻撃はまっすぐ1発＋斜め2発の扇状。横に広く掘れる代わりに1点への火力は落ちる
-    const SPREAD = 0.15;
-    for (const a of [-SPREAD, 0, SPREAD]) {
+    // 通常攻撃は扇状。横に広く掘れる代わりに1点への火力は落ちる
+    const sl = SHOT_LEVELS[Math.min(p.shot, SHOT_LEVELS.length - 1)];
+    const half = (sl.n - 1) / 2;
+    for (let k = 0; k < sl.n; k++) {
+      const a = (k - half) / Math.max(1, half) * sl.spread;
       G.bullets.push({
         x: p.x + Math.sin(a) * 14 * SHIP.scale,
         y: muzzle,
         vx: Math.sin(a) * 1150,
         vy: p.dirY * Math.cos(a) * 1150,
-        r: 5, dmg: 8, owner: p.idx, pierce: false, color: c.main,
+        r: sl.r, dmg: sl.dmg, owner: p.idx, pierce: false, color: c.main,
       });
     }
     SFX.shot(p.idx);
-    p.cool = 0.115;
+    p.cool = sl.cool;
   }
 }
 
@@ -1129,14 +1146,20 @@ function update(dt) {
       const catchR = ch.power ? 52 : 40;
       if (dx * dx + dy * dy < catchR * catchR) {    // 機体で受け止めた
         if (ch.power) {
-          if (p.beam < BEAM_LEVELS.length - 1) p.beam++;
-          p.charge = p.maxCharge;
+          p.powers++;
+          if (ch.kind === 'shot') {
+            if (p.shot < SHOT_LEVELS.length - 1) p.shot++;
+            G.banner = { text: `ショット きょうか！ Lv${p.shot + 1}`, life: 1.6 };
+          } else {
+            if (p.beam < BEAM_LEVELS.length - 1) p.beam++;
+            p.charge = p.maxCharge;
+            G.banner = { text: `ビーム きょうか！ Lv${p.beam + 1}`, life: 1.6 };
+          }
           G.score += 300;
           SFX.powerup();
           burst(ch.x, ch.y, P_COLORS[p.idx].main, 34, 380, 8);
           burst(ch.x, ch.y, '#ffffff', 18, 260, 5);
           G.shake = Math.max(G.shake, 12);
-          G.banner = { text: `ビーム きょうか！ Lv${p.beam + 1}`, life: 1.6 };
         } else {
           p.charge = Math.min(p.maxCharge, p.charge + 25);
           p.caught++;
@@ -1144,7 +1167,7 @@ function update(dt) {
           SFX.chip();
           burst(ch.x, ch.y, '#9cff8a', 12, 180, 4);
           // 一定数あつめるごとに、ビーム強化のかけらを落とす
-          if (p.caught % CHIPS_PER_POWER === 0 && p.beam < BEAM_LEVELS.length - 1) {
+          if (p.caught % CHIPS_PER_POWER === 0 && nextPowerKind(p)) {
             dropPowerChip(p.idx);
           }
         }
@@ -1209,18 +1232,33 @@ function update(dt) {
 
 
 // ビーム強化のかけら。ゆっくり落ちてくるので受け止めやすい
+// 強化アイテムの種類を決める。両方を代わるがわる、上限に達した方は飛ばす
+function nextPowerKind(p) {
+  const room = { beam: p.beam < BEAM_LEVELS.length - 1, shot: p.shot < SHOT_LEVELS.length - 1 };
+  if (!room.beam && !room.shot) return null;
+  const first = POWER_KINDS[p.powers % POWER_KINDS.length];
+  return room[first] ? first : (first === 'beam' ? 'shot' : 'beam');
+}
+
 function dropPowerChip(idx) {
   if (!FIELD.cell) return;
+  const p = G.players[idx];
+  if (!p) return;
+  const kind = nextPowerKind(p);
+  if (!kind) return;
   const side = idx === 1 ? 1 : 0;
   G.chips.push({
     x: rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30),
     y: side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0,
     vx: rand(-25, 25),
     vy: (side === 0 ? 1 : -1) * 60,
-    side, t: 0, power: true,
+    side, t: 0, power: true, kind,
   });
   SFX.powerDrop();
-  G.banner = { text: 'ビームきょうかの かけらだ！', life: 1.4 };
+  G.banner = {
+    text: kind === 'beam' ? 'ビームきょうかの かけらだ！' : 'ショットきょうかの かけらだ！',
+    life: 1.4,
+  };
 }
 
 function spawnBug() {
@@ -1605,12 +1643,26 @@ function drawChips() {
 
       ctx.shadowColor = col; ctx.shadowBlur = 22 * pulse;
       ctx.fillStyle = col;
-      ctx.beginPath();                               // 二重のシェブロン
-      for (const oy of [-5, 6]) {
-        ctx.moveTo(-13, 5 + oy); ctx.lineTo(0, -8 + oy); ctx.lineTo(13, 5 + oy);
-        ctx.lineTo(13, 10 + oy); ctx.lineTo(0, -3 + oy); ctx.lineTo(-13, 10 + oy);
+      if (ch.kind === 'shot') {
+        // 通常攻撃の強化＝広がる3本の矢
+        for (const a of [-0.5, 0, 0.5]) {
+          ctx.save();
+          ctx.rotate(a);
+          ctx.beginPath();
+          ctx.moveTo(0, -14); ctx.lineTo(4.5, -4); ctx.lineTo(-4.5, -4);
+          ctx.closePath(); ctx.fill();
+          ctx.fillRect(-1.6, -4, 3.2, 9);
+          ctx.restore();
+        }
+      } else {
+        // 強攻撃の強化＝二重のシェブロン
+        ctx.beginPath();
+        for (const oy of [-5, 6]) {
+          ctx.moveTo(-13, 5 + oy); ctx.lineTo(0, -8 + oy); ctx.lineTo(13, 5 + oy);
+          ctx.lineTo(13, 10 + oy); ctx.lineTo(0, -3 + oy); ctx.lineTo(-13, 10 + oy);
+        }
+        ctx.closePath(); ctx.fill();
       }
-      ctx.closePath(); ctx.fill();
       ctx.shadowBlur = 0;
     } else {
       ctx.rotate(ch.t * 5);
@@ -1865,10 +1917,10 @@ function drawPlayerHUD(p) {
 
   ctx.fillStyle = c.main;
   ctx.font = '700 12px system-ui, sans-serif';
-  const maxed = p.beam >= BEAM_LEVELS.length - 1;
+  const maxed = !nextPowerKind(p);
   const toNext = CHIPS_PER_POWER - (p.caught % CHIPS_PER_POWER);
   ctx.fillText(
-    `${c.name}   ★${p.stars}   ビーム Lv${p.beam + 1}` +
+    `${c.name}   ★${p.stars}   ショット Lv${p.shot + 1}   ビーム Lv${p.beam + 1}` +
     (maxed ? '  MAX' : `   ◆あと${toNext}`),
     0, -16);
   ctx.restore();

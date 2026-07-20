@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,zoneRect};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,zoneRect}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -120,10 +120,17 @@ check('畑が中央帯に収まる',
   resetGame(false);
   const p = G.players[0];
   p.x = 400; p.y = Z.bot.y0 + 40;
-  const put = (power) => {                       // 機体の目の前にかけらを置く
+  const put = (power, kind) => {                 // 機体の目の前にかけらを置く
     G.chips.length = 0;
-    G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: !!power });
+    G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: !!power, kind });
     update(1/60);
+  };
+  const grab = () => {                           // 落ちてきた強化かけらを受け取る
+    const c = G.chips.find(c => c.power);
+    if (!c) return null;
+    c.x = p.x; c.y = p.y;
+    update(1/60);
+    return c.kind;
   };
 
   check('最初のビームはLv1', p.beam === 0, `beam=${p.beam}`);
@@ -138,8 +145,30 @@ check('畑が中央帯に収まる',
   check('強化アイテムは拾った人の側へ落ちる',
         G.chips.filter(c => c.power).every(c => c.side === 0));
 
-  put(true);                                     // 強化アイテムを受け止める
-  check('受け止めるとビームがLv2になる', p.beam === 1, `beam=${p.beam}`);
+  const kind1 = grab();                          // 1個目の強化アイテム
+  check('受け止めるとビームがLv2になる', kind1 === 'beam' && p.beam === 1, `beam=${p.beam}`);
+
+  // 2個目は通常ショットの強化が来る
+  for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
+  const kind2 = grab();
+  check('2個目は通常ショットの強化', kind2 === 'shot' && p.shot === 1,
+        `kind=${kind2} shot=${p.shot}`);
+
+  // 通常ショットが実際に強くなっているか
+  const volley = () => {
+    G.bullets.length = 0; p.charge = 0; p.cool = 0; p.firing = false;
+    playerShoot(p);
+    return G.bullets.slice();
+  };
+  const s2 = volley();
+  p.shot = 0;
+  const s1 = volley();
+  check('強化すると通常ショットの弾数が増える', s2.length > s1.length,
+        `Lv1=${s1.length}発 -> Lv2=${s2.length}発`);
+  check('強化すると通常ショットの威力も上がる', s2[0].dmg > s1[0].dmg,
+        `威力 ${s1[0].dmg} -> ${s2[0].dmg}`);
+  check('通常ショットの強化は貫通しない', s2.every(b => !b.pierce));
+  p.shot = 1;
 
   // 実際にビームが強くなっているか
   const shoot = () => {
@@ -155,9 +184,10 @@ check('畑が中央帯に収まる',
         `Lv1(r${lv1.r} 威力${lv1.dmg} 貫通${lv1.pierceLeft}) -> Lv2(r${lv2.r} 威力${lv2.dmg} 貫通${lv2.pierceLeft})`);
 
   // --- ダメージを受けると1段階下がる ---
-  p.beam = 2; p.stun = 0;
+  p.beam = 2; p.shot = 0; p.stun = 0;
   explode(p.x, p.y);
-  check('ダメージを受けるとビームが1段階下がる', p.beam === 1, `beam=${p.beam}`);
+  check('ダメージを受けると高い方が1段階下がる', p.beam === 1 && p.shot === 0,
+        `beam=${p.beam} shot=${p.shot}`);
   check('同時に動けなくなる', p.stun > 0, `stun=${p.stun}`);
 
   // 連鎖爆発で一気に丸裸にならないこと（動けない間は重ねて下がらない）
@@ -177,17 +207,26 @@ check('畑が中央帯に収まる',
   check('Lv1より下には下がらない', p.beam === 0, `beam=${p.beam}`);
   for (let i = 0; i < 60 * 4 && p.stun > 0; i++) update(1/60);
 
-  // 上限
+  // 上限（両方とも最大なら出ない）
   p.beam = BEAM_LEVELS.length - 1;
-  const before = p.beam;
+  p.shot = SHOT_LEVELS.length - 1;
+  p.stun = 0;
   p.caught = 0;
   for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
-  check('最大まで強化したら強化アイテムは出ない',
-        !G.chips.some(c => c.power) && p.beam === before, `beam=${p.beam}`);
+  check('両方とも最大なら強化アイテムは出ない',
+        !G.chips.some(c => c.power), `chips=${G.chips.length}`);
+
+  // 片方だけ最大なら、伸びしろのある方が出る
+  p.shot = 0; p.caught = 0;
+  for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
+  const only = G.chips.find(c => c.power);
+  check('片方が最大なら、もう片方の強化が出る', only && only.kind === 'shot',
+        `kind=${only && only.kind}`);
+  G.chips.length = 0;
 
   G.chips.length = 0;
   resetGame(false);
-  check('やり直すとビームはLv1に戻る', G.players[0].beam === 0);
+  check('やり直すと両方Lv1に戻る', G.players[0].beam === 0 && G.players[0].shot === 0);
   onDown(ev(1,400,1000)); onDown(ev(2,400,200));
 }
 
