@@ -29,8 +29,8 @@ global.performance = { now: () => Date.now() };
 global.requestAnimationFrame = noop;
 global.setTimeout = noop;
 
-const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect};')();
-const { onDown, onMove, onUp, update, G, pointers, Z, updateRect } = api;
+const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect,PAUSE};')();
+const { onDown, onMove, onUp, update, G, pointers, Z, updateRect, PAUSE } = api;
 
 const ev = (id, x, y) => ({ pointerId:id, clientX:x, clientY:y, preventDefault:noop });
 const BOT = 1000, TOP = 200;   // 画面高1200 → 中央600
@@ -158,15 +158,34 @@ for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = fals
 onDown(ev(20, 400, 1000));                        // 正常に操作中
 const keepX = G.players[0].tx, keepY = G.players[0].ty;
 
-onDown(ev(21, -50, 1000));                        // 画面左外をタップ
-check('画面外タップは無視される（左）', G.players[0].pointer === 20 && !pointers.has(21));
-onDown(ev(22, 400, 1400));                        // 画面下外をタップ
-check('画面外タップは無視される（下）', G.players[0].pointer === 20 && !pointers.has(22));
-onDown(ev(23, NaN, NaN));                         // 不正値
-check('不正座標のタップは無視される', G.players[0].pointer === 20 && !pointers.has(23));
+onDown(ev(21, -50, 1000));                        // 画面左外をタップ → ポーズ
+check('画面外タップでポーズになる（左）', G.mode === 'pause' && !pointers.has(21), `mode=${G.mode}`);
+onDown(ev(24, 400, 1000));                        // ポーズ中はどこを触っても再開
+check('タップで再開する', G.mode === 'play' && !pointers.has(24), `mode=${G.mode}`);
+check('再開のタップは機体を動かさない', G.players[0].pointer === -1, `pointer=${G.players[0].pointer}`);
+
+onDown(ev(20, 400, 1000));                        // 操作を再開
+const keep2X = G.players[0].tx, keep2Y = G.players[0].ty;
+onDown(ev(22, 400, 1400));                        // 画面下外 → ポーズ
+check('画面外タップでポーズになる（下）', G.mode === 'pause' && !pointers.has(22), `mode=${G.mode}`);
+onDown(ev(25, 400, 1000)); onDown(ev(20, 400, 1000));   // 再開して操作し直す
+
+onDown(ev(23, NaN, NaN));                         // 不正値はポーズにもしない
+check('不正座標のタップは完全に無視される',
+      G.mode === 'play' && G.players[0].pointer === 20 && !pointers.has(23), `mode=${G.mode}`);
 check('操作中の機体は影響を受けない',
-      G.players[0].tx === keepX && G.players[0].ty === keepY,
+      G.players[0].tx === keep2X && G.players[0].ty === keep2Y,
       `tx=${G.players[0].tx} ty=${G.players[0].ty}`);
+
+// ポーズ中はゲームが進まない
+onDown(ev(26, -50, 600));
+const froze = { x:G.players[0].x, wave:G.wave };
+for (let i = 0; i < 60; i++) update(0.016);
+check('ポーズ中はゲームが進行しない',
+      G.mode === 'pause' && G.players[0].x === froze.x && G.wave === froze.wave,
+      `x=${G.players[0].x}`);
+onDown(ev(27, 400, 1000));                        // 再開
+onDown(ev(20, 400, 1000));
 
 onMove(ev(20, NaN, NaN));                         // 移動側に不正値が来た場合
 check('不正座標の移動で機体が壊れない',
@@ -175,6 +194,13 @@ update(0.016);
 check('不正座標のあとも描画位置が有限', isFinite(G.players[0].x) && isFinite(G.players[0].y),
       `x=${G.players[0].x} y=${G.players[0].y}`);
 onUp(ev(20, 400, 1000));
+
+// --- ポーズボタン ---
+onUp(ev(20, 400, 1000));
+onDown(ev(30, PAUSE.btn.x, PAUSE.btn.y));
+check('ポーズボタンで止まる', G.mode === 'pause' && !pointers.has(30), `mode=${G.mode}`);
+onDown(ev(31, PAUSE.btn.x, PAUSE.btn.y));
+check('ポーズボタンで再開する', G.mode === 'play' && !pointers.has(31), `mode=${G.mode}`);
 
 console.log(fail === 0 ? '\n=== 全テスト通過 ===' : `\n=== ${fail}件 失敗 ===`);
 process.exit(fail ? 1 : 0);

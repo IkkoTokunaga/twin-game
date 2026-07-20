@@ -57,9 +57,11 @@ function resize() {
   FS.btn.x = W - 36;
   FS.btn.y = Z.cy;
 
-  // ミュートは全画面ボタンと対になる左端中央へ
+  // ミュートは全画面ボタンと対になる左端中央へ。ポーズはその上に並べる
   AU.btn.x = 36;
   AU.btn.y = Z.cy;
+  PAUSE.btn.x = 36;
+  PAUSE.btn.y = Z.cy - 66;
 
   updateRect();
   makeStars();
@@ -83,6 +85,18 @@ if (window.visualViewport) {
 }
 const localX = (e) => (e.clientX - rect.left) * rect.sx;
 const localY = (e) => (e.clientY - rect.top)  * rect.sy;
+
+/* ---------------- ポーズ ---------------- */
+const PAUSE = { btn: { x:0, y:0, r:26 } };
+
+function setPaused(on) {
+  if (on && G.mode === 'play') {
+    G.mode = 'pause';
+    releaseAllPointers();      // 指を離した状態にしておく（再開時の暴発防止）
+  } else if (!on && G.mode === 'pause') {
+    G.mode = 'play';
+  }
+}
 
 /* ---------------- 全画面 ---------------- */
 const FS = {
@@ -349,7 +363,7 @@ function makeStars() {
 
 /* ---------------- ゲーム状態 ---------------- */
 const G = {
-  mode: 'title',          // title | play | over
+  mode: 'title',          // title | play | pause | over
   t: 0,
   wave: 1,
   score: 0,
@@ -472,15 +486,23 @@ function onDown(e) {
 
   // 各種ボタンは最優先で判定（機体の移動・射撃には渡さない）
   const ex = localX(e), ey = localY(e);
-  // 画面外・盤面外・不正値のタップは受け付けない。
-  // 操作中の指を横取りして機体が飛ぶのを防ぐ。
+  // 不正値は問答無用で破棄（機体の座標を壊すため）
   if (!isFinite(ex) || !isFinite(ey)) return;
+  // 盤面の外側をタップしたらポーズ。操作中の指は横取りさせない。
   const pad = 4;
-  if (ex < -pad || ey < -pad || ex > W + pad || ey > H + pad) return;
+  if (ex < -pad || ey < -pad || ex > W + pad || ey > H + pad) {
+    if (G.mode === 'play') { setPaused(true); SFX.ui(); }
+    return;
+  }
   const onBtn = (b) => {
     const dx = ex - b.x, dy = ey - b.y, hit = b.r + 10;
     return dx * dx + dy * dy < hit * hit;
   };
+  if (onBtn(PAUSE.btn) && (G.mode === 'play' || G.mode === 'pause')) {
+    audioResume(); SFX.ui();
+    setPaused(G.mode === 'play');
+    return;
+  }
   if (FS.supported && onBtn(FS.btn)) { audioResume(); SFX.ui(); toggleFullscreen(); return; }
   if (AU.supported && onBtn(AU.btn)) {
     audioResume();
@@ -491,6 +513,9 @@ function onDown(e) {
 
   // 自動再生制限の解除はユーザー操作の中でしかできない
   audioResume();
+
+  // ポーズ中はどこを触っても再開。指の位置で機体が飛ばないよう入力には使わない
+  if (G.mode === 'pause') { setPaused(false); return; }
 
   if (G.mode === 'title') {
     // 最初のタップ＝ユーザー操作なので、ここでしか全画面には入れない
@@ -568,7 +593,9 @@ cv.addEventListener('pointermove',   onMove,  { passive:false });
 cv.addEventListener('pointerup',     onUp,    { passive:false });
 cv.addEventListener('pointercancel', onUp,    { passive:false });
 window.addEventListener('blur', releaseAllPointers);
-document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllPointers(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { releaseAllPointers(); setPaused(true); }   // 裏に回ったら自動ポーズ
+});
 cv.addEventListener('contextmenu', e => e.preventDefault());
 for (const g of ['gesturestart', 'gesturechange', 'gestureend']) {
   document.addEventListener(g, e => e.preventDefault());
@@ -656,6 +683,9 @@ function enemyShoot(en) {
 /* ---------------- 更新 ---------------- */
 function update(dt) {
   G.t += dt;
+  // ポーズ中は星も粒子も含めて完全に止める（表示の点滅のため G.t だけ進める）
+  if (G.mode === 'pause') return;
+
   G.shake *= Math.pow(0.02, dt);
   if (G.banner) { G.banner.life -= dt; if (G.banner.life <= 0) G.banner = null; }
 
@@ -833,11 +863,13 @@ function draw() {
   ctx.restore();
 
   if (G.mode === 'title') drawTitle();
+  if (G.mode === 'pause') drawPauseOverlay();
   if (G.mode === 'over')  drawOver();
   if (G.banner) drawBanner(G.banner);
   // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
   drawFsButton();
   drawMuteButton();
+  drawPauseButton();
 }
 
 function drawArena() {
@@ -1030,6 +1062,43 @@ function drawMuteButton() {
       ctx.arc(1, 0, r, -Math.PI / 3, Math.PI / 3);
       ctx.stroke();
     }
+  }
+  ctx.restore();
+}
+
+function drawPauseButton() {
+  if (G.mode !== 'play' && G.mode !== 'pause') return;
+  btnBase(PAUSE.btn);
+  ctx.fillStyle = '#fff';
+  if (G.mode === 'pause') {                 // 再生（▶）
+    ctx.beginPath();
+    ctx.moveTo(-6, -10); ctx.lineTo(11, 0); ctx.lineTo(-6, 10);
+    ctx.closePath(); ctx.fill();
+  } else {                                  // 一時停止（||）
+    ctx.fillRect(-8, -10, 5.5, 20);
+    ctx.fillRect(3, -10, 5.5, 20);
+  }
+  ctx.restore();
+}
+
+function drawPauseOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,6,18,0.72)';
+  ctx.fillRect(0, 0, W, H);
+  for (const flip of [0, 1]) {
+    ctx.save();
+    ctx.translate(W / 2, flip ? Z.cy - H * 0.20 : Z.cy + H * 0.20);
+    if (flip) ctx.rotate(Math.PI);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = '#31e6ff'; ctx.shadowBlur = 22;
+    ctx.font = '900 40px system-ui, sans-serif';
+    ctx.fillText('PAUSE', 0, -18);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
+    ctx.font = '700 17px system-ui, sans-serif';
+    ctx.fillText('タップでつづける', 0, 24);
+    ctx.restore();
   }
   ctx.restore();
 }
