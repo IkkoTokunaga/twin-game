@@ -12,19 +12,24 @@
 - 被弾でHPが0になるとダウン、5秒で自動復活。**2人同時にダウンでゲームオーバー**
 - 敵を倒すと次のWAVEへ（HP・弾速・弾幕が強化される）
 
-## 起動
+## 遊ぶ
+
+**https://twin-game.pages.dev/** — タブレットのブラウザで開くだけ。
+横向き・縦向きどちらでも動作します（縦向き推奨）。
+
+## ローカルで動かす
 
 ビルド不要。`index.html` を開くだけです。
 
-同じWi-Fi上のタブレットから開く場合:
+## デプロイ
+
+Cloudflare Pages（プロジェクト名 `twin-game`）で配信しています。
 
 ```bash
-cd /home/ikk/app/twin-game
-python3 -m http.server 8080
+cp index.html dist/
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
+  npx wrangler pages deploy dist --project-name twin-game --branch main
 ```
-
-タブレットのブラウザで `http://<PCのIPアドレス>:8080/` を開く。
-横向き・縦向きどちらでも動作します（縦向き推奨）。
 
 ## 技術メモ
 
