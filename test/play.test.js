@@ -341,25 +341,51 @@ check('畑が中央帯に収まる',
   check('両方とも最大なら巨大レーザーの球が出る', orb && orb.kind === 'laser',
         `kind=${orb && orb.kind}`);
 
-  // 取った瞬間に前方のブロックがごっそり消える
-  makeField(3);
-  for (const b of FIELD.grid) if (b) { b.type = 0; b.hp = b.maxHp = 24; b.star = false; }
-  p.x = FIELD.x0 + FIELD.cols * FIELD.cell / 2;
-  p.y = Z.bot.y0 + 40;
-  const beforeAll = FIELD.grid.filter(Boolean).length;
-  G.lasers.length = 0;
-  put(true, 'laser');
-  const afterAll = FIELD.grid.filter(Boolean).length;
-  const wiped = beforeAll - afterAll;
-  check('球を取ると巨大レーザーが出る', G.lasers.length === 1, `lasers=${G.lasers.length}`);
-  check('前方のブロックが縦にまとめて消える', wiped >= FIELD.rows * 2,
-        `消えた数=${wiped} (${FIELD.rows}段)`);
-  check('畑全体は消えない', afterAll > 0, `残=${afterAll}`);
-  console.log(`  参考: 巨大レーザーで${wiped}個消滅（畑${beforeAll}個中）`);
+  // 取った瞬間に前方へ巨大レーザーが出る
+  const setupLane = (lockRow) => {
+    makeField(3);
+    for (const b of FIELD.grid) if (b) { b.type = 0; b.hp = b.maxHp = 24; b.star = false; }
+    if (lockRow !== undefined) {                 // 進路に相手の色のブロックを置く
+      const col = Math.floor(FIELD.cols / 2);
+      const bb = FIELD.grid[idxAt(col, lockRow)];
+      if (bb) { bb.type = B_LOCK1; bb.hp = bb.maxHp = 24; }
+    }
+    p.x = FIELD.x0 + (Math.floor(FIELD.cols / 2) + 0.5) * FIELD.cell;
+    p.y = Z.bot.y0 + 40;
+    G.bullets.length = 0;
+  };
+  const colBlocks = () => {                      // 機体の真上の列に残っている数
+    const col = Math.floor(FIELD.cols / 2);
+    let n = 0;
+    for (let r = 0; r < FIELD.rows; r++) if (FIELD.grid[idxAt(col, r)]) n++;
+    return n;
+  };
 
-  // 残光は自動で片付く
-  for (let i = 0; i < 60; i++) update(1/60);
-  check('巨大レーザーの残光は消える', G.lasers.length === 0, `lasers=${G.lasers.length}`);
+  setupLane();
+  const beforeAll = FIELD.grid.filter(Boolean).length;
+  put(true, 'laser');
+  check('球を取ると巨大レーザーが出る', G.bullets.some(b => b.giant), `弾=${G.bullets.length}`);
+  const shot = G.bullets.find(b => b.giant);
+  check('威力は最大まで強化したビームと同じ', shot.dmg === BEAM_LEVELS[BEAM_LEVELS.length - 1].dmg,
+        `威力=${shot.dmg}`);
+  for (let i = 0; i < 90; i++) update(1/60);     // 通り抜けるまで
+  check('進路のブロックを全部貫通する', colBlocks() === 0, `残=${colBlocks()}段`);
+  const afterAll = FIELD.grid.filter(Boolean).length;
+  check('畑全体は消えない', afterAll > 0, `残=${afterAll} / ${beforeAll}`);
+  console.log(`  参考: 巨大レーザーで${beforeAll - afterAll}個消滅（畑${beforeAll}個中）`);
+
+  // 色つきブロックは巨大レーザーも止める
+  setupLane(FIELD.rows - 3);
+  put(true, 'laser');
+  for (let i = 0; i < 90; i++) update(1/60);
+  const col = Math.floor(FIELD.cols / 2);
+  const blocker = FIELD.grid[idxAt(col, FIELD.rows - 3)];
+  check('色つきブロックは巨大レーザーを止める', !!blocker && blocker.type === B_LOCK1,
+        `blocker=${blocker && blocker.type}`);
+  let beyond = 0;
+  for (let r = 0; r < FIELD.rows - 3; r++) if (FIELD.grid[idxAt(col, r)]) beyond++;
+  check('色つきブロックの向こう側は無傷', beyond === FIELD.rows - 3, `残=${beyond}`);
+  G.bullets.length = 0;
 
   // 片方だけ最大なら、伸びしろのある方が出る
   p.shot = 0; p.caught = 0;

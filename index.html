@@ -459,7 +459,6 @@ const G = {
   bugs: [],               // おじゃまむし（当たると一時停止）
   bugT: 0,                // 次のおじゃまむしまでの秒数
   blasts: [],             // 爆発の衝撃波
-  lasers: [],             // 巨大レーザーの残光
   celebrate: null,        // 10ステージごとのお祝い演出
   flash: 0,               // 画面全体の閃光
   parts: [],
@@ -797,7 +796,7 @@ function resetGame(solo) {
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
-  G.blasts.length = 0; G.lasers.length = 0; G.flash = 0;
+  G.blasts.length = 0; G.flash = 0;
   G.celebrate = null;
   // ひとり用は青（下側）のみ。上側は生成しないので、そちらを触っても何も起きない
   G.players = G.solo ? [makePlayer(0)] : [makePlayer(0), makePlayer(1)];
@@ -1072,7 +1071,7 @@ function update(dt) {
       G.nextT = 0;
       G.stage++;
       G.bullets.length = 0; G.chips.length = 0; G.bugs.length = 0;
-      G.blasts.length = 0; G.lasers.length = 0; G.flash = 0;
+      G.blasts.length = 0; G.flash = 0;
       makeField(G.stage);
       const debut = Object.keys(BLOCK_DEBUT).find(t => BLOCK_DEBUT[t] === G.stage);
       G.banner = debut
@@ -1138,6 +1137,8 @@ function update(dt) {
         p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.22);
       }
       burst(b.x, b.y, b.color, b.pierce ? 8 : 4, b.pierce ? 220 : 130, b.pierce ? 5 : 3);
+      // 色つきブロックは貫通ビームでも通さない
+      if (res === 'blocked') { G.bullets.splice(i, 1); continue; }
       if (!b.pierce) { G.bullets.splice(i, 1); continue; }
       if (--b.pierceLeft <= 0) { G.bullets.splice(i, 1); continue; }   // 貫通しきったら消える
     }
@@ -1229,13 +1230,6 @@ function update(dt) {
     if (cb.t >= cb.dur) G.celebrate = null;
   }
 
-  /* --- 巨大レーザーの残光 --- */
-  for (let i = G.lasers.length - 1; i >= 0; i--) {
-    const lz = G.lasers[i];
-    lz.t += dt;
-    if (lz.t >= lz.dur) G.lasers.splice(i, 1);
-  }
-
   /* --- 爆発の衝撃波と閃光 --- */
   G.flash = Math.max(0, G.flash - dt * 3.4);
   for (let i = G.blasts.length - 1; i >= 0; i--) {
@@ -1302,33 +1296,20 @@ function dropPowerChip(idx, x, y) {
   return true;
 }
 
-// 取った瞬間に前方へ撃つ巨大レーザー。畑を縦にごっそり焼き払う
+// 取った瞬間に前方へ撃つ巨大レーザー。
+// 威力は最大まで強化したビームと同じで、色つきブロック以外は貫通していく。
 function fireGiantLaser(p) {
-  const w = FIELD.cell * 2.6;
-  const x0 = p.x - w / 2, x1 = p.x + w / 2;
-
-  const c0 = Math.floor((x0 - FIELD.x0) / FIELD.cell);
-  const c1 = Math.floor((x1 - FIELD.x0) / FIELD.cell);
-  for (let c = c0; c <= c1; c++) {
-    for (let r = 0; r < FIELD.rows; r++) {
-      // 爆弾は誘爆させない（取った本人が巻き込まれると理不尽なため）
-      damageBlock(c, r, 9999, p.idx, true);
-    }
-  }
-
-  for (let i = G.bugs.length - 1; i >= 0; i--) {    // 通り道の虫も焼く
-    const bg = G.bugs[i];
-    if (bg.x > x0 && bg.x < x1) {
-      G.score += 150;
-      burst(bg.x, bg.y, '#ff7ad9', 20, 280, 6);
-      G.bugs.splice(i, 1);
-    }
-  }
-
-  G.lasers.push({ x: p.x, w, dirY: p.dirY, from: p.y, t: 0, dur: 0.6,
-                  color: P_COLORS[p.idx].main });
-  G.shake = Math.max(G.shake, 30);
-  G.flash = Math.min(1, G.flash + 0.85);
+  const top = BEAM_LEVELS[BEAM_LEVELS.length - 1];
+  const muzzle = p.y + p.dirY * 20 * SHIP.scale;
+  G.bullets.push({
+    x: p.x, y: muzzle, vx: 0, vy: p.dirY * 1400,
+    r: 30, dmg: top.dmg, owner: p.idx,
+    pierce: true, pierceLeft: Infinity, giant: true,
+    color: P_COLORS[p.idx].main,
+  });
+  burst(p.x, muzzle, '#ffffff', 26, 420, 8);
+  G.shake = Math.max(G.shake, 20);
+  G.flash = Math.min(1, G.flash + 0.5);
   SFX.giantLaser();
 }
 
@@ -1409,7 +1390,6 @@ function draw() {
     drawBugs();
     drawChips();
     drawGems();
-    drawLasers();
     drawBlasts();
     for (const b of G.bullets) drawBullet(b);
     for (const p of G.players) drawShip(p);
@@ -1788,37 +1768,6 @@ function drawLockIcon(cx, cy, cell, owner) {
   ctx.restore();
 }
 
-function drawLasers() {
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  for (const lz of G.lasers) {
-    const q = clamp(lz.t / lz.dur, 0, 1);
-    const fade = 1 - q;
-    const grow = q < 0.12 ? q / 0.12 : 1;            // 一瞬で立ち上がる
-    const w = lz.w * grow;
-    const y0 = lz.from;
-    const y1 = lz.dirY < 0 ? -20 : H + 20;
-
-    const g = ctx.createLinearGradient(lz.x - w / 2, 0, lz.x + w / 2, 0);
-    g.addColorStop(0,    'rgba(0,0,0,0)');
-    g.addColorStop(0.25, lz.color);
-    g.addColorStop(0.5,  '#ffffff');
-    g.addColorStop(0.75, lz.color);
-    g.addColorStop(1,    'rgba(0,0,0,0)');
-    ctx.globalAlpha = fade;
-    ctx.fillStyle = g;
-    ctx.fillRect(lz.x - w / 2, Math.min(y0, y1), w, Math.abs(y1 - y0));
-
-    ctx.globalAlpha = fade * 0.9;                    // 白い芯
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(lz.x - w * 0.12, Math.min(y0, y1), w * 0.24, Math.abs(y1 - y0));
-
-    ctx.globalAlpha = fade * 0.7;                    // 根元の閃光
-    ctx.beginPath(); ctx.arc(lz.x, y0, w * 0.5 * (0.6 + q), 0, TAU); ctx.fill();
-  }
-  ctx.restore();
-}
-
 function drawBlasts() {
   ctx.save();
   for (const bl of G.blasts) {
@@ -2078,7 +2027,7 @@ function drawBullet(b) {
   ctx.shadowColor = b.color; ctx.shadowBlur = b.pierce ? 30 : 12;
   ctx.fillStyle = b.color;
   if (b.pierce) {
-    const len = b.r * 4.5;
+    const len = b.r * (b.giant ? 9 : 4.5);
     ctx.globalAlpha = 0.9;
     ctx.fillRect(-len, -b.r, len * 1.1, b.r * 2);
     ctx.fillStyle = '#fff';
