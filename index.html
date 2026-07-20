@@ -708,7 +708,6 @@ function breakBlock(c, r, ownerIdx, depth) {
                   taken: false, life: 0.9, owner: ownerIdx >= 0 ? ownerIdx : 0 });
     SFX.starFound();
     burst(pos.x, pos.y, '#ffd54a', 30, 300, 7);
-    G.banner = { text: 'スターはっけん！', life: 1.4 };
   } else {
     // 近くにスターがあれば光の粒でそっと知らせる
     let near = false;
@@ -736,11 +735,6 @@ function hurtPlayer(p, stunTime) {
     const hitBeam = p.beam >= p.shot;
     if (hitBeam) p.beam--; else p.shot--;
     SFX.powerDown();
-    G.banner = {
-      text: hitBeam ? `ビームが よわくなった… Lv${p.beam + 1}`
-                    : `ショットが よわくなった… Lv${p.shot + 1}`,
-      life: 1.5,
-    };
     burst(p.x, p.y, '#9aa4b8', 22, 260, 6);
   }
 }
@@ -765,12 +759,8 @@ function explode(x, y) {
     if (dx * dx + dy * dy < radius * radius) {     // 爆風に巻き込まれた
       // firing は落とさない。発射判定が stun を見ているので、
       // 解除と同時に自動で撃ち始められる（指を置き直す必要がない）
-      const wasStunned = p.stun > 0;
       hurtPlayer(p, BLAST_STUN);
       burst(p.x, p.y, '#ff8a3c', 24, 280, 6);
-      if (!wasStunned && p.beam === 0) {
-        G.banner = { text: P_COLORS[p.idx].name + ' ばくはつに まきこまれた！', life: 1.2 };
-      }
     }
   }
 }
@@ -1173,11 +1163,9 @@ function update(dt) {
           p.powers++;
           if (ch.kind === 'shot') {
             if (p.shot < SHOT_LEVELS.length - 1) p.shot++;
-            G.banner = { text: `ショット きょうか！ Lv${p.shot + 1}`, life: 1.6 };
           } else {
             if (p.beam < BEAM_LEVELS.length - 1) p.beam++;
             p.charge = p.maxCharge;
-            G.banner = { text: `ビーム きょうか！ Lv${p.beam + 1}`, life: 1.6 };
           }
           G.score += 300;
           SFX.powerup();
@@ -1279,10 +1267,6 @@ function dropPowerChip(idx) {
     side, t: 0, power: true, kind,
   });
   SFX.powerDrop();
-  G.banner = {
-    text: kind === 'beam' ? 'ビームきょうかの かけらだ！' : 'ショットきょうかの かけらだ！',
-    life: 1.4,
-  };
 }
 
 function spawnBug() {
@@ -1311,7 +1295,6 @@ function collectGem(g, ownerIdx) {
   burst(g.x, g.y, '#ffd54a', 46, 420, 9);
   burst(g.x, g.y, '#fff6c8', 18, 220, 6);
   G.shake = Math.max(G.shake, 12);
-  G.banner = { text: `★ ゲット！  ${G.starsFound} / ${G.starsTotal}`, life: 1.3 };
 
   if (G.starsFound >= G.starsTotal) {
     G.score += 500 * G.stage;
