@@ -14,7 +14,8 @@
 
 ## 遊ぶ
 
-**https://twin-game.pages.dev/** — タブレットのブラウザで開くだけ。
+**https://twin-game.ikk-dev.jp/** — タブレットのブラウザで開くだけ。
+（`https://twin-game.pages.dev/` でも同じものが動きます）
 横向き・縦向きどちらでも動作します（縦向き推奨）。
 
 ## ローカルで動かす
