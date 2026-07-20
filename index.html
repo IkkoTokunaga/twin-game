@@ -50,15 +50,13 @@ function resize() {
   cv.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-  Z.top.y0 = H * 0.06;  Z.top.y1 = H * 0.35;
-  Z.bot.y0 = H * 0.65;  Z.bot.y1 = H * 0.94;
+  Z.top.y0 = H * 0.10;  Z.top.y1 = H * 0.35;
+  Z.bot.y0 = H * 0.65;  Z.bot.y1 = H * 0.90;
   Z.cy = H / 2;
   // 全画面ボタンは中央帯の右端＝どちらのプレイヤーの操作エリアにも掛からない位置
   FS.btn.x = W - 36;
   FS.btn.y = Z.cy;
 
-  // 指1本ぶん＋余白。小さい画面で離れすぎないよう上下限を設ける
-  SHIP.offset = clamp(H * 0.10, 62, 115);
   // ミュートは全画面ボタンと対になる左端中央へ
   AU.btn.x = 36;
   AU.btn.y = Z.cy;
@@ -329,7 +327,9 @@ function difficulty() {
 const SHIP = {
   scale: 1.8,     // 見た目の拡大率
   hit: 17,        // 当たり判定の半径（見た目より小さめ＝弾幕ゲーの定石）
-  offset: 80,     // 指から敵側へどれだけ離して表示するか（resizeで画面に合わせて調整）
+  edgeY: 46,      // 画面の上下端の不可侵帯。ホームバーや通知シェードを引っぱらせない
+  edgeX: 26,      // 同じく左右端（戻るジェスチャ対策）
+  gap: 64,        // 指と機体の最小距離。これ未満だと指で機体が隠れる
 };
 
 /* ---------------- utils ---------------- */
@@ -404,10 +404,28 @@ function clampPlayer(p) {
 
 /* 指の位置から機体の目標位置を決める。
    指より敵側にずらすことで、機体が指の下に隠れないようにする。 */
+// 指が届く範囲を、機体が動ける範囲へそのまま写像する。
+//
+// 「指の位置から一定量ずらす」方式だと、機体を自分の陣地の端まで動かすのに
+// 指を画面外へ出す必要があり、しかも画面の上下端は端末のシステムジェスチャ
+// 領域なので操作が OS に奪われてしまう。指の可動範囲そのものを陣地に対応
+// させることで、画面端に触れなくても隅々まで届き、かつ機体は常に指より
+// 敵側（＝指に隠れない位置）に来る。
 function aimFromFinger(p, cx, cy) {
   p.fx = cx; p.fy = cy;
-  p.tx = cx;
-  p.ty = cy + p.dirY * SHIP.offset;
+  const z = p.bottom ? Z.bot : Z.top;
+
+  // 指の可動範囲。機体が必ず指より敵側に来るよう、陣地の手前に gap を確保する
+  const gap = SHIP.gap;
+  const f0 = p.bottom ? z.y0 + gap  : SHIP.edgeY;
+  const f1 = p.bottom ? H - SHIP.edgeY : z.y1 - gap;
+  const t  = f1 > f0 ? clamp((cy - f0) / (f1 - f0), 0, 1) : 0;
+  p.ty = z.y0 + t * (z.y1 - z.y0);
+
+  const m  = 20 * SHIP.scale;
+  const u  = clamp((cx - SHIP.edgeX) / Math.max(1, W - SHIP.edgeX * 2), 0, 1);
+  p.tx = m + u * (W - m * 2);
+
   clampPlayer(p);
 }
 
