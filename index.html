@@ -335,6 +335,7 @@ const G = {
   enemy: null,
   shake: 0,
   overT: 0,
+  spawnT: 0,              // 次の敵が出るまでの秒数
   banner: null,           // {text, life}
 };
 
@@ -361,6 +362,7 @@ function makePlayer(idx) {
     invuln: 3,
     hitFlash: 0,
     pointer: -1,
+    stack: [],                           // その側に触れている指（最後の1本が操作中）
   };
 }
 
@@ -404,6 +406,7 @@ function resetGame() {
   G.bullets.length = 0; G.ebullets.length = 0; G.parts.length = 0;
   G.players = [makePlayer(0), makePlayer(1)];
   G.enemy = makeEnemy(1);
+  G.spawnT = 0;
   G.shake = 0;
   G.banner = { text: 'WAVE 1', life: 1.6 };
   pointers.clear();
@@ -440,44 +443,73 @@ function onDown(e) {
     if (FS.supported && !isFullscreen()) enterFullscreen();
     resetGame(); G.mode = 'play';
     SFX.wave();
-    return;
+    // return せず、この指をそのまま操作に使う（指を置き直さなくて済む）
+  } else if (G.mode === 'over') {
+    if (G.overT <= 0.8) return;
+    resetGame(); G.mode = 'play';
   }
-  if (G.mode === 'over') { if (G.overT > 0.8) { resetGame(); G.mode = 'play'; } return; }
 
   const idx = playerForY(e.clientY);
   const p = G.players[idx];
   if (!p) return;
-  // すでにその側が別の指で操作中なら、新しい指に主導権を渡す
-  if (p.pointer !== -1) pointers.delete(p.pointer);
+
+  // 明示的にキャプチャして、指が画面端に出ても追跡が切れないようにする
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+
+  pointers.set(e.pointerId, { idx, x: e.clientX, y: e.clientY });
+  p.stack.push(e.pointerId);        // 同じ側を複数の指で触っても取りこぼさない
   p.pointer = e.pointerId;
-  pointers.set(e.pointerId, idx);
   p.firing = true;
   aimFromFinger(p, e.clientX, e.clientY);
 }
 
 function onMove(e) {
-  const idx = pointers.get(e.pointerId);
-  if (idx === undefined) return;
+  const rec = pointers.get(e.pointerId);
+  if (!rec) return;
   e.preventDefault();
-  // 座標がまとめて届く端末では最後の座標だけ使えば十分
-  aimFromFinger(G.players[idx], e.clientX, e.clientY);
+  rec.x = e.clientX; rec.y = e.clientY;
+  const p = G.players[rec.idx];
+  // 操作中の指だけが機体を動かす（同じ側の他の指は位置だけ覚えておく）
+  if (p && p.pointer === e.pointerId) aimFromFinger(p, e.clientX, e.clientY);
 }
 
 function onUp(e) {
-  const idx = pointers.get(e.pointerId);
-  if (idx === undefined) return;
+  const rec = pointers.get(e.pointerId);
+  if (!rec) return;
   e.preventDefault();
-  const p = G.players[idx];
-  p.firing = false;
-  p.pointer = -1;
   pointers.delete(e.pointerId);
+  try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
+  const p = G.players[rec.idx];
+  if (p) releasePointer(p, e.pointerId);
+}
+
+// 指を1本離す。同じ側にまだ触れている指が残っていれば操作を引き継ぐ
+function releasePointer(p, id) {
+  const i = p.stack.indexOf(id);
+  if (i !== -1) p.stack.splice(i, 1);
+  const next = p.stack.length ? p.stack[p.stack.length - 1] : -1;
+  p.pointer = next;
+  if (next === -1) {
+    p.firing = false;
+    return;
+  }
+  p.firing = true;
+  const rec = pointers.get(next);
+  if (rec) aimFromFinger(p, rec.x, rec.y);
+}
+
+// アプリ切り替えなどでイベントを取りこぼしても、押しっぱなし状態を残さない
+function releaseAllPointers() {
+  pointers.clear();
+  for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
 }
 
 cv.addEventListener('pointerdown',   onDown,  { passive:false });
 cv.addEventListener('pointermove',   onMove,  { passive:false });
 cv.addEventListener('pointerup',     onUp,    { passive:false });
 cv.addEventListener('pointercancel', onUp,    { passive:false });
-cv.addEventListener('pointerleave',  onUp,    { passive:false });
+window.addEventListener('blur', releaseAllPointers);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllPointers(); });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
 document.addEventListener('touchmove', e => e.preventDefault(), { passive:false });
@@ -572,6 +604,16 @@ function update(dt) {
 
   /* --- プレイヤー --- */
   for (const p of G.players) {
+    // イベントを取りこぼしても操作不能のまま固まらないよう、毎フレーム突き合わせる
+    for (let i = p.stack.length - 1; i >= 0; i--) {
+      if (!pointers.has(p.stack[i])) p.stack.splice(i, 1);
+    }
+    const act = p.stack.length ? p.stack[p.stack.length - 1] : -1;
+    if (act !== p.pointer) {
+      p.pointer = act;
+      p.firing = act !== -1 && !p.down;
+    }
+
     p.hitFlash = Math.max(0, p.hitFlash - dt * 3);
     p.invuln = Math.max(0, p.invuln - dt);
 
@@ -597,6 +639,12 @@ function update(dt) {
 
     p.cool -= dt;
     if (p.firing && p.cool <= 0) playerShoot(p);
+  }
+
+  /* --- 次のWAVEの敵を出す --- */
+  if (!G.enemy && G.spawnT > 0) {
+    G.spawnT -= dt;
+    if (G.spawnT <= 0) { G.spawnT = 0; G.enemy = makeEnemy(G.wave); }
   }
 
   /* --- 敵 --- */
@@ -689,7 +737,7 @@ function defeatEnemy(en) {
   for (const p of G.players) if (!p.down) p.hp = Math.min(p.maxHp, p.hp + 45);
   G.banner = { text: 'WAVE ' + G.wave, life: 1.8 };
   SFX.wave();
-  setTimeout(() => { if (G.mode === 'play') G.enemy = makeEnemy(G.wave); }, 1500);
+  G.spawnT = 1.5;   // setTimeout はタブが裏に回ると止まるのでゲーム内時間で数える
 }
 
 /* ---------------- 描画 ---------------- */
