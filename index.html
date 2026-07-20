@@ -823,30 +823,28 @@ function playerShoot(p) {
   const muzzle = p.y + p.dirY * 20 * SHIP.scale;   // 機体の拡大に合わせて発射位置もずらす
   if (big) {
     p.charge = 0;
-    // まっすぐ1本＋斜め2本の扇状。真ん中が主砲で、斜めは端をかすめる程度にする。
+    // 強攻撃はまっすぐ1本に集中させる。
     // pierceLeft: 貫通できるブロック数。これが無いと列を丸ごと消してしまう。
-    const beams = [
-      { a: 0,     spd: 1500, r: 20, dmg: 110, pierceLeft: 3 },
-      { a: -0.20, spd: 1380, r: 13, dmg: 70,  pierceLeft: 1 },
-      { a:  0.20, spd: 1380, r: 13, dmg: 70,  pierceLeft: 1 },
-    ];
-    for (const bm of beams) {
-      G.bullets.push({
-        x: p.x, y: muzzle,
-        vx: Math.sin(bm.a) * bm.spd,
-        vy: p.dirY * Math.cos(bm.a) * bm.spd,
-        r: bm.r, dmg: bm.dmg, owner: p.idx,
-        pierce: true, pierceLeft: bm.pierceLeft, color: c.main,
-      });
-    }
+    G.bullets.push({
+      x: p.x, y: muzzle, vx: 0, vy: p.dirY * 1500,
+      r: 20, dmg: 110, owner: p.idx,
+      pierce: true, pierceLeft: 3, color: c.main,
+    });
     burst(p.x, muzzle, c.main, 18, 320, 6);
     SFX.beam();
     G.shake = Math.max(G.shake, 8);
     p.cool = 0.42;
   } else {
-    for (const off of [-11 * SHIP.scale, 11 * SHIP.scale]) {
-      G.bullets.push({ x:p.x+off, y:muzzle, vx:0, vy: p.dirY*1150, r:5, dmg:8,
-                       owner:p.idx, pierce:false, color:c.main });
+    // 通常攻撃はまっすぐ1発＋斜め2発の扇状。横に広く掘れる代わりに1点への火力は落ちる
+    const SPREAD = 0.15;
+    for (const a of [-SPREAD, 0, SPREAD]) {
+      G.bullets.push({
+        x: p.x + Math.sin(a) * 14 * SHIP.scale,
+        y: muzzle,
+        vx: Math.sin(a) * 1150,
+        vy: p.dirY * Math.cos(a) * 1150,
+        r: 5, dmg: 8, owner: p.idx, pierce: false, color: c.main,
+      });
     }
     SFX.shot(p.idx);
     p.cool = 0.115;

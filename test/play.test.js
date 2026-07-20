@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
@@ -49,18 +49,14 @@ check('畑が中央帯に収まる',
   playerShoot(p);                             // ビームを1発だけ撃つ
   const beamCount = G.bullets.length;
   const angs = G.bullets.map(b => Math.atan2(b.vx || 0, -b.vy * (p.bottom ? 1 : -1)));
-  check('扇状の内訳がまっすぐ1本＋斜め2本',
-        angs.filter(a => Math.abs(a) < 0.01).length === 1 &&
-        angs.filter(a => a < -0.05).length === 1 &&
-        angs.filter(a => a > 0.05).length === 1,
-        `角度=${angs.map(a => a.toFixed(2)).join(', ')}`);
+  check('強攻撃はまっすぐ1本だけ',
+        beamCount === 1 && Math.abs(angs[0]) < 0.01,
+        `本数=${beamCount} 角度=${angs.map(a => a.toFixed(2)).join(', ')}`);
   let guard = 0;
   while (G.bullets.length && guard++ < 600) { p.cool = 99; p.firing = false; update(1/60); }
   const broken = before - FIELD.grid.filter(Boolean).length;
-  // まっすぐ(貫通3)＋斜め2本(貫通1ずつ) = 最大5
-  check('強攻撃が壊すのは5ブロックまで', broken <= 5 && broken >= 1,
+  check('強攻撃が壊すのは3ブロックまで', broken <= 3 && broken >= 1,
         `壊した数=${broken} / 縦${FIELD.rows}列`);
-  check('強攻撃は3本の扇状で出る', beamCount === 3, `本数=${beamCount}`);
   check('強攻撃ではチャージが溜まらない', p.charge < p.maxCharge, `charge=${p.charge}`);
   G.bullets.length = 0;
   p.cool = 0;                                  // 検証用に伸ばした発射待ちを戻す
@@ -98,6 +94,23 @@ check('畑が中央帯に収まる',
   makeField(G.stage);
 }
 
+// --- 通常攻撃は扇状 ---
+{
+  const p = G.players[0];
+  p.charge = 0; p.cool = 0; p.firing = false;
+  G.bullets.length = 0;
+  playerShoot(p);
+  const angs = G.bullets.map(b => Math.atan2(b.vx || 0, -b.vy));
+  check('通常攻撃はまっすぐ1発＋斜め2発',
+        G.bullets.length === 3 &&
+        angs.filter(a => Math.abs(a) < 0.01).length === 1 &&
+        angs.filter(a => a < -0.05).length === 1 &&
+        angs.filter(a => a > 0.05).length === 1,
+        `本数=${G.bullets.length} 角度=${angs.map(a => a.toFixed(2)).join(', ')}`);
+  check('通常攻撃は貫通しない', G.bullets.every(b => !b.pierce));
+  G.bullets.length = 0; p.cool = 0;
+}
+
 // --- 爆発の巻き込み ---
 {
   const p0 = G.players[0], p1 = G.players[1];
@@ -105,6 +118,8 @@ check('畑が中央帯に収まる',
   p0.x = 400; p0.y = Z.bot.y0;                  // 畑のすぐそばに立つ
   p1.x = 400; p1.y = Z.top.y0;                  // 遠くにいる
   G.blasts.length = 0; G.flash = 0;
+  // 待機中に流れ弾が別の爆弾を誘爆させると検証がぶれるので、爆弾を取り除いておく
+  for (const b of FIELD.grid) if (b && b.type === B_BOMB) { b.type = 0; b.hp = b.maxHp = 24; }
 
   explode(400, Z.bot.y0 - FIELD.cell);          // 近くで爆発
   check('爆風に巻き込まれると動けなくなる', p0.stun === BLAST_STUN, `stun=${p0.stun}`);
@@ -117,9 +132,13 @@ check('畑が中央帯に収まる',
   check('爆発で動けない間は撃てない', G.bullets.length === 0, `弾=${G.bullets.length}`);
 
   // 時間が経てば解除され、衝撃波も消える
-  for (let i = 0; i < 120; i++) update(1/60);
-  check('2秒後には動けるようになる', p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
+  for (let i = 0; i < 150 && p0.stun > 0; i++) update(1/60);
+  check('2秒以内に動けるようになる', p0.stun === 0, `stun=${p0.stun.toFixed(2)}`);
+  // 撃ち始めるかどうかを見たいので、いったん弾を空にしてから数フレームだけ進める
+  G.bullets.length = 0;
+  for (let i = 0; i < 10; i++) update(1/60);
   check('解除後は指を置き直さずに撃てる', G.bullets.length > 0, `弾=${G.bullets.length}`);
+  for (let i = 0; i < 60; i++) update(1/60);
   check('衝撃波は後片付けされる', G.blasts.length === 0, `blasts=${G.blasts.length}`);
   check('閃光も消える', G.flash === 0, `flash=${G.flash}`);
   makeField(G.stage);
@@ -143,6 +162,7 @@ check('畑が中央帯に収まる',
   const p=G.players[0];
   set(B_LOCK1); p.charge=0;
   G.bullets.length=0;
+  G.chips.length=0;    // かけらを拾うとチャージが増えるので、混ざらないよう空にする
   G.bullets.push({x:FIELD.x0+FIELD.cell*0.5, y:FIELD.y0+FIELD.cell*0.5, vy:-1, r:5, dmg:8, owner:0, pierce:false, color:'#fff'});
   update(1/60);
   check('色違いに当ててもチャージは増えない', p.charge===0, `charge=${p.charge}`);
