@@ -59,6 +59,9 @@ function resize() {
 
   // 指1本ぶん＋余白。小さい画面で離れすぎないよう上下限を設ける
   SHIP.offset = clamp(H * 0.10, 62, 115);
+  // ミュートは全画面ボタンと対になる左端中央へ
+  AU.btn.x = 36;
+  AU.btn.y = Z.cy;
 
   makeStars();
   for (const p of G.players) clampPlayer(p);
@@ -107,6 +110,174 @@ function lockOrientation() {
 
 for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) {
   document.addEventListener(ev, () => { resize(); setTimeout(resize, 120); });
+}
+
+/* ============================================================
+   サウンド（Web Audio による合成 / 音源ファイル不要）
+   波形を都度生成するので外部リクエストは一切発生しない。
+============================================================ */
+const AU = {
+  supported: !!(window.AudioContext || window.webkitAudioContext),
+  ctx: null, master: null, sfxBus: null, bgmBus: null, noise: null,
+  muted: false,
+  btn: { x:0, y:0, r:26 },
+};
+
+function audioInit() {
+  if (AU.ctx || !AU.supported) return;
+  const C = window.AudioContext || window.webkitAudioContext;
+  AU.ctx = new C();
+
+  // 同時発音が重なっても歪まないよう、出力前に軽く潰す
+  const comp = AU.ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.ratio.value = 12;
+  comp.attack.value = 0.003; comp.release.value = 0.15;
+
+  AU.master = AU.ctx.createGain(); AU.master.gain.value = AU.muted ? 0 : 0.9;
+  AU.sfxBus = AU.ctx.createGain(); AU.sfxBus.gain.value = 0.55;
+  AU.bgmBus = AU.ctx.createGain(); AU.bgmBus.gain.value = 0.28;
+  AU.sfxBus.connect(comp); AU.bgmBus.connect(comp);
+  comp.connect(AU.master); AU.master.connect(AU.ctx.destination);
+
+  // ホワイトノイズは1本作って使い回す
+  const len = Math.floor(AU.ctx.sampleRate * 0.6);
+  const buf = AU.ctx.createBuffer(1, len, AU.ctx.sampleRate);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+  AU.noise = buf;
+
+  BGM.nextTime = AU.ctx.currentTime;
+}
+
+// 自動再生制限があるので、必ずユーザー操作の中から呼ぶ
+function audioResume() {
+  audioInit();
+  if (AU.ctx && AU.ctx.state === 'suspended') AU.ctx.resume().catch(() => {});
+}
+
+function setMuted(m) {
+  AU.muted = m;
+  if (AU.master) AU.master.gain.setTargetAtTime(m ? 0 : 0.9, AU.ctx.currentTime, 0.02);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!AU.ctx) return;
+  if (document.hidden) AU.ctx.suspend().catch(() => {});
+  else if (!AU.muted) AU.ctx.resume().catch(() => {});
+});
+
+/* --- 音を鳴らす最小プリミティブ --- */
+function tone(o) {
+  if (!AU.ctx || AU.muted) return;
+  const t = AU.ctx.currentTime + (o.delay || 0);
+  const osc = AU.ctx.createOscillator();
+  const g = AU.ctx.createGain();
+  osc.type = o.type || 'square';
+  osc.frequency.setValueAtTime(o.f, t);
+  if (o.f2) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.f2), t + o.dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.vol, t + (o.atk || 0.006));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  osc.connect(g); g.connect(o.bus || AU.sfxBus);
+  osc.start(t); osc.stop(t + o.dur + 0.03);
+}
+
+function noiseBurst(o) {
+  if (!AU.ctx || AU.muted) return;
+  const t = AU.ctx.currentTime + (o.delay || 0);
+  const src = AU.ctx.createBufferSource(); src.buffer = AU.noise;
+  const f = AU.ctx.createBiquadFilter();
+  f.type = o.filter || 'lowpass';
+  f.frequency.setValueAtTime(o.f, t);
+  if (o.f2) f.frequency.exponentialRampToValueAtTime(Math.max(40, o.f2), t + o.dur);
+  const g = AU.ctx.createGain();
+  g.gain.setValueAtTime(o.vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  src.connect(f); f.connect(g); g.connect(o.bus || AU.sfxBus);
+  src.start(t); src.stop(t + o.dur + 0.03);
+}
+
+// 高頻度で鳴る音は間引かないと音が濁り、発振器も無駄に増える
+const _lastPlay = {};
+function throttled(key, ms, fn) {
+  const n = performance.now();
+  if (_lastPlay[key] && n - _lastPlay[key] < ms) return;
+  _lastPlay[key] = n;
+  fn();
+}
+
+const SFX = {
+  shot(idx) {
+    throttled('shot' + idx, 55, () =>
+      tone({ f: idx ? 900 : 760, f2: idx ? 430 : 360, type:'square', dur:0.07, vol:0.05 }));
+  },
+  beam() {
+    tone({ f:180, f2:1500, type:'sawtooth', dur:0.45, vol:0.20 });
+    noiseBurst({ f:500, f2:5000, dur:0.4, vol:0.14, filter:'bandpass' });
+  },
+  hit() {
+    throttled('hit', 55, () => tone({ f:2300, f2:1300, type:'square', dur:0.03, vol:0.035 }));
+  },
+  eshot() {
+    throttled('eshot', 45, () => tone({ f:230, f2:120, type:'sawtooth', dur:0.12, vol:0.055 }));
+  },
+  playerHit() {
+    noiseBurst({ f:900, f2:120, dur:0.3, vol:0.35 });
+    tone({ f:180, f2:60, type:'square', dur:0.25, vol:0.16 });
+  },
+  down() {
+    noiseBurst({ f:1200, f2:60, dur:0.9, vol:0.5 });
+    tone({ f:300, f2:40, type:'sawtooth', dur:0.8, vol:0.26 });
+  },
+  boom() {
+    noiseBurst({ f:2200, f2:50, dur:1.4, vol:0.6 });
+    tone({ f:120, f2:30, type:'square', dur:1.0, vol:0.3 });
+    [523, 659, 784, 1047].forEach((f, i) =>
+      tone({ f, type:'triangle', dur:0.3, vol:0.17, delay:0.3 + i * 0.085 }));
+  },
+  wave() {
+    [392, 523, 659].forEach((f, i) =>
+      tone({ f, type:'triangle', dur:0.28, vol:0.16, delay:i * 0.09 }));
+  },
+  revive() { tone({ f:300, f2:900, type:'triangle', dur:0.3, vol:0.2 }); },
+  ui()     { tone({ f:620, f2:930, type:'triangle', dur:0.08, vol:0.13 }); },
+};
+
+/* --- BGM：16ステップのシーケンスを先読みしながら組み立てる --- */
+const BGM = {
+  nextTime: 0,
+  step: 0,
+  arp:  [0, 7, 3, 10, 5, 7, 3, 12, 0, 7, 3, 10, 8, 7, 5, 3],
+  bass: [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1],
+};
+
+function bgmUpdate() {
+  if (!AU.ctx || AU.muted || G.mode !== 'play') return;
+  const tempo = Math.min(154, 100 + G.wave * 5);
+  const stepDur = 60 / tempo / 4;                 // 16分音符
+  const now = AU.ctx.currentTime;
+  if (BGM.nextTime < now) BGM.nextTime = now;     // タブ復帰などで大きく遅れた場合
+  while (BGM.nextTime < now + 0.25) {             // 0.25秒先まで先読みして予約
+    bgmStep(BGM.step, BGM.nextTime, stepDur);
+    BGM.step = (BGM.step + 1) % 16;
+    BGM.nextTime += stepDur;
+  }
+}
+
+function bgmStep(s, t, dur) {
+  const d = t - AU.ctx.currentTime;
+  if (d < 0) return;
+  const root = 55 * Math.pow(2, ((G.wave - 1) % 5) * 2 / 12);   // WAVEごとに少しずつ上へ
+
+  if (BGM.bass[s]) {
+    tone({ f: root, type:'square', dur: dur * 1.9, vol: 0.22, delay: d, bus: AU.bgmBus });
+  }
+  if (s % 2 === 0) {
+    tone({ f: root * 4 * Math.pow(2, BGM.arp[s] / 12), type:'triangle',
+           dur: dur * 1.3, vol: 0.09, delay: d, bus: AU.bgmBus });
+  }
+  noiseBurst({ f: 7000, dur: 0.03, vol: s % 4 === 2 ? 0.05 : 0.022,
+               filter:'highpass', delay: d, bus: AU.bgmBus });
 }
 
 /* ---------------- 自機のサイズと指との位置関係 ---------------- */
@@ -228,16 +399,28 @@ function playerForY(y) { return y > Z.cy ? 0 : 1; }
 function onDown(e) {
   e.preventDefault();
 
-  // 全画面ボタンは最優先で判定（機体の移動・射撃には渡さない）
-  if (FS.supported) {
-    const dx = e.clientX - FS.btn.x, dy = e.clientY - FS.btn.y, hit = FS.btn.r + 10;
-    if (dx * dx + dy * dy < hit * hit) { toggleFullscreen(); return; }
+  // 各種ボタンは最優先で判定（機体の移動・射撃には渡さない）
+  const onBtn = (b) => {
+    const dx = e.clientX - b.x, dy = e.clientY - b.y, hit = b.r + 10;
+    return dx * dx + dy * dy < hit * hit;
+  };
+  if (FS.supported && onBtn(FS.btn)) { audioResume(); SFX.ui(); toggleFullscreen(); return; }
+  if (AU.supported && onBtn(AU.btn)) {
+    audioResume();
+    setMuted(!AU.muted);
+    if (!AU.muted) SFX.ui();
+    return;
   }
+
+  // 自動再生制限の解除はユーザー操作の中でしかできない
+  audioResume();
 
   if (G.mode === 'title') {
     // 最初のタップ＝ユーザー操作なので、ここでしか全画面には入れない
     if (FS.supported && !isFullscreen()) enterFullscreen();
-    resetGame(); G.mode = 'play'; return;
+    resetGame(); G.mode = 'play';
+    SFX.wave();
+    return;
   }
   if (G.mode === 'over') { if (G.overT > 0.8) { resetGame(); G.mode = 'play'; } return; }
 
@@ -299,12 +482,14 @@ function playerShoot(p) {
     p.charge = 0;
     G.bullets.push({ x:p.x, y:muzzle, vy: p.dirY*1500, r:20, dmg:110, owner:p.idx, pierce:true, color:c.main });
     burst(p.x, muzzle, c.main, 18, 320, 6);
+    SFX.beam();
     G.shake = Math.max(G.shake, 8);
     p.cool = 0.42;
   } else {
     for (const off of [-11 * SHIP.scale, 11 * SHIP.scale]) {
       G.bullets.push({ x:p.x+off, y:muzzle, vy: p.dirY*1150, r:5, dmg:8, owner:p.idx, pierce:false, color:c.main });
     }
+    SFX.shot(p.idx);
     p.cool = 0.115;
   }
 }
@@ -345,6 +530,7 @@ function enemyShoot(en) {
       push(a + Math.PI, spd * 1.3, 6, 9);
     }
   }
+  SFX.eshot();
   en.fireT = Math.max(0.42, 1.35 - G.wave * 0.075) * rand(0.85, 1.2);
   en.pattern = (Math.random() < 0.45) ? (en.pattern + 1) % 4 : Math.floor(rand(0, 4));
 }
@@ -369,6 +555,7 @@ function update(dt) {
       if (p.respawn <= 0) {
         p.down = false; p.hp = 60; p.invuln = 2.5; p.charge = 0;
         if (p.pointer !== -1) p.firing = true;   // 指を置いたままなら復活と同時に射撃再開
+        SFX.revive();
         burst(p.x, p.y, P_COLORS[p.idx].main, 26, 240, 5);
         G.banner = { text: P_COLORS[p.idx].name + ' REVIVED', life: 1.2 };
       }
@@ -407,6 +594,7 @@ function update(dt) {
       const dx = b.x - en.x, dy = b.y - en.y;
       if (dx*dx + dy*dy < (en.r + b.r) * (en.r + b.r)) {
         en.hp -= b.dmg; en.flash = 1;
+        SFX.hit();
         G.score += Math.round(b.dmg);
         const p = G.players[b.owner];
         p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.55);
@@ -428,6 +616,7 @@ function update(dt) {
       const dx = e.x - p.x, dy = e.y - p.y, rr = e.r + SHIP.hit;
       if (dx*dx + dy*dy < rr*rr) {
         p.hp -= e.dmg; p.hitFlash = 1;
+        SFX.playerHit();
         G.shake = Math.max(G.shake, 6);
         burst(e.x, e.y, '#ff9a3c', 10, 200, 4);
         G.ebullets.splice(i, 1);
@@ -438,6 +627,7 @@ function update(dt) {
   }
 
   updateParts(dt);
+  bgmUpdate();
 }
 
 function updateParts(dt) {
@@ -453,6 +643,7 @@ function updateParts(dt) {
 function downPlayer(p) {
   p.hp = 0; p.down = true; p.respawn = 5; p.firing = false; p.charge = 0;
   burst(p.x, p.y, P_COLORS[p.idx].main, 40, 420, 7);
+  SFX.down();
   G.shake = Math.max(G.shake, 16);
   if (G.players.every(q => q.down)) {
     G.mode = 'over'; G.overT = 0;
@@ -465,12 +656,14 @@ function defeatEnemy(en) {
   G.score += 1000 * G.wave;
   burst(en.x, en.y, '#fff', 70, 620, 9);
   burst(en.x, en.y, '#ffb300', 50, 420, 12);
+  SFX.boom();
   G.shake = 26;
   G.ebullets.length = 0;
   G.enemy = null;
   G.wave++;
   for (const p of G.players) if (!p.down) p.hp = Math.min(p.maxHp, p.hp + 30);
   G.banner = { text: 'WAVE ' + G.wave, life: 1.8 };
+  SFX.wave();
   setTimeout(() => { if (G.mode === 'play') G.enemy = makeEnemy(G.wave); }, 1500);
 }
 
@@ -508,7 +701,9 @@ function draw() {
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'over')  drawOver();
   if (G.banner) drawBanner(G.banner);
-  drawFsButton();   // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
+  // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
+  drawFsButton();
+  drawMuteButton();
 }
 
 function drawArena() {
@@ -667,18 +862,48 @@ function drawEBullet(e) {
   ctx.restore();
 }
 
-function drawFsButton() {
-  if (!FS.supported) return;
-  const b = FS.btn, full = isFullscreen();
+// ボタンの共通の下地（呼び出し側で ctx.restore() する）
+function btnBase(b) {
   ctx.save();
   ctx.translate(b.x, b.y);
-
   ctx.globalAlpha = G.mode === 'play' ? 0.35 : 0.75;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.arc(0, 0, b.r, 0, TAU); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.45)';
   ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.arc(0, 0, b.r, 0, TAU); ctx.stroke();
+}
+
+function drawMuteButton() {
+  if (!AU.supported) return;
+  btnBase(AU.btn);
+  ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff';
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  ctx.beginPath();                                   // スピーカー本体
+  ctx.moveTo(-10, -4); ctx.lineTo(-5, -4); ctx.lineTo(1, -10);
+  ctx.lineTo(1, 10);   ctx.lineTo(-5, 4);  ctx.lineTo(-10, 4);
+  ctx.closePath(); ctx.fill();
+
+  if (AU.muted) {                                    // ×印
+    ctx.beginPath();
+    ctx.moveTo(6, -6); ctx.lineTo(15, 6);
+    ctx.moveTo(15, -6); ctx.lineTo(6, 6);
+    ctx.stroke();
+  } else {                                           // 音波
+    for (const r of [7, 12]) {
+      ctx.beginPath();
+      ctx.arc(1, 0, r, -Math.PI / 3, Math.PI / 3);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawFsButton() {
+  if (!FS.supported) return;
+  const b = FS.btn, full = isFullscreen();
+  btnBase(b);
 
   // 全画面=外向きの隅アイコン / 解除=内向き
   ctx.strokeStyle = '#fff';
