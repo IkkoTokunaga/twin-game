@@ -1,0 +1,63 @@
+// ブロック掘り＆スター探しの通しテスト:  node test/play.test.js
+const fs=require('fs');
+let src=fs.readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
+src=src.slice(src.indexOf('<script>')+8, src.lastIndexOf('</script>'));
+const noop=()=>{};
+const ctxStub=new Proxy({},{get:(t,k)=>{
+  if(k==='createLinearGradient')return ()=>({addColorStop:noop});
+  if(k==='measureText')return ()=>({width:10});
+  if(k==='arc')return (x,y,r)=>{ if(r<0) throw new Error('負の半径 '+r); };
+  return noop;}});
+const el={addEventListener:noop,getContext:()=>ctxStub,style:{},width:0,height:0,
+  setPointerCapture:noop,releasePointerCapture:noop,
+  getBoundingClientRect:()=>({left:0,top:0,width:800,height:1200})};
+global.document={getElementById:()=>el,addEventListener:noop,documentElement:{},fullscreenElement:null,hidden:false};
+global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListener:noop,
+  visualViewport:null,AudioContext:null,webkitAudioContext:null};
+global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
+
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z}=api;
+const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
+let fail=0;
+const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
+
+onDown(ev(1,400,1000));                       // ゲーム開始
+check('ブロック畑が生成される', FIELD.grid.length > 0 && FIELD.cols>3 && FIELD.rows===5,
+      `cols=${FIELD.cols} rows=${FIELD.rows} cell=${Math.round(FIELD.cell)}`);
+const total=FIELD.grid.filter(Boolean).length;
+check('スターが隠されている', G.starsTotal >= 2 && G.starsFound === 0, `total=${G.starsTotal}`);
+const starCells=FIELD.grid.filter(b=>b&&b.star).length;
+check('スターの数が畑の中身と一致', starCells === G.starsTotal, `畑=${starCells} 宣言=${G.starsTotal}`);
+check('畑が中央帯に収まる',
+      FIELD.y0 >= Z.top.y1 && FIELD.y0+FIELD.rows*FIELD.cell <= Z.bot.y0+0.01,
+      `y0=${Math.round(FIELD.y0)} y1=${Math.round(FIELD.y0+FIELD.rows*FIELD.cell)} zone=${Math.round(Z.top.y1)}..${Math.round(Z.bot.y0)}`);
+
+// 2人で掘り進める
+onDown(ev(2,400,200));
+let frames=0, cleared=0, maxStage=1;
+for(let i=0;i<60*180;i++){                    // 3分ぶん
+  frames++;
+  const x=26+ (i*9)%(800-52);
+  onMove(ev(1,x,900+ (i%200)));
+  onMove(ev(2,800-x,300-(i%200)));
+  update(1/60); draw();
+  if(G.stage>maxStage){maxStage=G.stage; cleared++;}
+  if(G.stage>=4) break;
+}
+check('ブロックが掘れている', G.players[0].dug+G.players[1].dug > 20,
+      `P1=${G.players[0].dug} P2=${G.players[1].dug}`);
+check('スターを回収してステージが進む', maxStage>=2, `stage=${maxStage} 経過=${(frames/60).toFixed(1)}秒`);
+check('スコアが加算される', G.score>0, `score=${G.score}`);
+check('新ステージでスターが再配置される',
+      G.starsTotal>=2 && FIELD.grid.filter(b=>b&&b.star).length + G.starsFound >= G.starsTotal,
+      `total=${G.starsTotal} found=${G.starsFound}`);
+check('スターの取りこぼしがない', G.starsFound<=G.starsTotal, `${G.starsFound}/${G.starsTotal}`);
+check('畑が機体の可動範囲に収まる',
+      FIELD.x0 >= 20*1.8-0.01 && FIELD.x0+FIELD.cols*FIELD.cell <= 800-20*1.8+0.01,
+      `x0=${FIELD.x0.toFixed(1)} x1=${(FIELD.x0+FIELD.cols*FIELD.cell).toFixed(1)}`);
+check('弾が無限に溜まらない', G.bullets.length<200, `bullets=${G.bullets.length}`);
+check('粒子が無限に溜まらない', G.parts.length<2000, `parts=${G.parts.length}`);
+console.log(`\n  参考: ${(frames/60).toFixed(1)}秒でステージ${maxStage}到達 / スコア${G.score} / 掘った数 P1=${G.players[0].dug} P2=${G.players[1].dug}`);
+console.log(fail===0?'\n=== 全テスト通過 ===':`\n=== ${fail}件 失敗 ===`);
+process.exit(fail?1:0);

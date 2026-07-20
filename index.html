@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>TWIN BEAM — 上下対戦協力シューター</title>
+<title>STAR DIGGERS — ふたりでほって星さがし</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body {
@@ -24,11 +24,12 @@
 'use strict';
 
 /* ============================================================
-   TWIN BEAM
-   画面を上下に分割し、中央の敵を2人で挟み撃ちする協力シューター。
+   STAR DIGGERS
+   画面を上下に分割し、中央のブロック畑を2人で掘って
+   隠れたスターを探す協力ゲーム。
    - 自分側のゾーンをドラッグ → 機体が指に追従
    - 触れている間は自動連射（同時タップは pointerId で独立管理）
-   - ダメージを与えるとチャージが溜まり、満タンで貫通ビームを発射
+   - 掘るほどチャージが溜まり、満タンで一気に貫通する大ビーム
 ============================================================ */
 
 const cv  = document.getElementById('cv');
@@ -66,7 +67,7 @@ function resize() {
   updateRect();
   makeStars();
   for (const p of G.players) clampPlayer(p);
-  if (G.enemy) { G.enemy.x = Math.min(Math.max(G.enemy.x, W*0.2), W*0.8); }
+  if (G.mode !== 'title' && FIELD.cell) makeField(G.stage);   // 画面サイズが変わったら畑を作り直す
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
@@ -242,42 +243,40 @@ const SFX = {
     tone({ f:180, f2:1500, type:'sawtooth', dur:0.45, vol:0.20 });
     noiseBurst({ f:500, f2:5000, dur:0.4, vol:0.14, filter:'bandpass' });
   },
-  hit() {
-    throttled('hit', 55, () => tone({ f:2300, f2:1300, type:'square', dur:0.03, vol:0.035 }));
+  blockHit() {                                   // ブロックを削る音
+    throttled('bhit', 55, () => noiseBurst({ f:1400, f2:600, dur:0.05, vol:0.10 }));
   },
-  eshot() {
-    throttled('eshot', 45, () => tone({ f:230, f2:120, type:'sawtooth', dur:0.12, vol:0.055 }));
+  blockBreak() {                                 // ブロックが割れる音
+    throttled('bbreak', 40, () => {
+      noiseBurst({ f:2400, f2:300, dur:0.22, vol:0.26 });
+      tone({ f:320, f2:150, type:'square', dur:0.12, vol:0.09 });
+    });
   },
-  playerHit() {
-    noiseBurst({ f:900, f2:120, dur:0.3, vol:0.35 });
-    tone({ f:180, f2:60, type:'square', dur:0.25, vol:0.16 });
+  bomb() {
+    noiseBurst({ f:1800, f2:60, dur:0.7, vol:0.5 });
+    tone({ f:140, f2:35, type:'square', dur:0.5, vol:0.24 });
   },
-  down() {
-    noiseBurst({ f:1200, f2:60, dur:0.9, vol:0.5 });
-    tone({ f:300, f2:40, type:'sawtooth', dur:0.8, vol:0.26 });
+  near() {                                       // スターが近いことを知らせる小さな音
+    throttled('near', 220, () => tone({ f:1180, f2:1560, type:'triangle', dur:0.12, vol:0.10 }));
   },
-  boom() {
-    noiseBurst({ f:2200, f2:50, dur:1.4, vol:0.6 });
-    tone({ f:120, f2:30, type:'square', dur:1.0, vol:0.3 });
+  starFound() {                                  // 掘り当てた瞬間
+    [784, 988, 1319].forEach((f, i) =>
+      tone({ f, type:'triangle', dur:0.24, vol:0.20, delay:i * 0.06 }));
+  },
+  starGet() {                                    // 回収した瞬間
+    [523, 659, 784, 1047, 1319].forEach((f, i) =>
+      tone({ f, type:'triangle', dur:0.26, vol:0.20, delay:i * 0.065 }));
+  },
+  clear() {
     [523, 659, 784, 1047].forEach((f, i) =>
-      tone({ f, type:'triangle', dur:0.3, vol:0.17, delay:0.3 + i * 0.085 }));
+      tone({ f, type:'square', dur:0.34, vol:0.17, delay:i * 0.13 }));
+    noiseBurst({ f:6000, f2:1000, dur:0.5, vol:0.10, filter:'highpass', delay:0.5 });
   },
-  wave() {
+  stage() {
     [392, 523, 659].forEach((f, i) =>
       tone({ f, type:'triangle', dur:0.28, vol:0.16, delay:i * 0.09 }));
   },
-  revive() { tone({ f:300, f2:900, type:'triangle', dur:0.3, vol:0.2 }); },
-  correct() {
-    [523, 659, 784, 1047].forEach((f, i) =>
-      tone({ f, type:'triangle', dur:0.22, vol:0.2, delay:i * 0.07 }));
-  },
-  wrong() {
-    tone({ f:200, f2:110, type:'sawtooth', dur:0.28, vol:0.14 });
-  },
-  quizStart() {
-    [660, 880].forEach((f, i) => tone({ f, type:'triangle', dur:0.16, vol:0.15, delay:i * 0.1 }));
-  },
-  ui()     { tone({ f:620, f2:930, type:'triangle', dur:0.08, vol:0.13 }); },
+  ui() { tone({ f:620, f2:930, type:'triangle', dur:0.08, vol:0.13 }); },
 };
 
 /* --- BGM：16ステップのシーケンスを先読みしながら組み立てる --- */
@@ -290,7 +289,7 @@ const BGM = {
 
 function bgmUpdate() {
   if (!AU.ctx || AU.muted || G.mode !== 'play') return;
-  const tempo = Math.min(154, 100 + G.wave * 5);
+  const tempo = Math.min(150, 98 + G.stage * 4);
   const stepDur = 60 / tempo / 4;                 // 16分音符
   const now = AU.ctx.currentTime;
   if (BGM.nextTime < now) BGM.nextTime = now;     // タブ復帰などで大きく遅れた場合
@@ -304,7 +303,7 @@ function bgmUpdate() {
 function bgmStep(s, t, dur) {
   const d = t - AU.ctx.currentTime;
   if (d < 0) return;
-  const root = 55 * Math.pow(2, ((G.wave - 1) % 5) * 2 / 12);   // WAVEごとに少しずつ上へ
+  const root = 55 * Math.pow(2, ((G.stage - 1) % 5) * 2 / 12);   // ステージごとに少しずつ上へ
 
   if (BGM.bass[s]) {
     tone({ f: root, type:'square', dur: dur * 1.9, vol: 0.22, delay: d, bus: AU.bgmBus });
@@ -318,22 +317,16 @@ function bgmStep(s, t, dur) {
 }
 
 /* ============================================================
-   難易度カーブ
-   1〜2WAVE目は子供でも遊べる強さに抑え、WAVEが進むにつれて
-   本来の弾速・弾数・威力に近づける。
+   ステージ設定
+   序盤は子供でも掘り切れる量にし、進むほど硬いブロックと
+   スターの数が増える。
 ============================================================ */
-function difficulty() {
-  const w = G.wave;
+function stageSetup(n) {
   return {
-    bulletSpeed:  190 + w * 24,                          // 弾速
-    fireInterval: Math.max(0.45, 2.0 - w * 0.13),        // 攻撃の間隔（秒）
-    dmgScale:     Math.min(1, 0.5 + (w - 1) * 0.14),     // 被ダメージの倍率
-    // 狙い撃ちの弾数。単発→2way→3wayと段階的に増やして急な跳ね上がりを避ける
-    aimSpread:    w <= 2 ? [0] : (w === 3 ? [-0.13, 0.13] : [-0.16, 0, 0.16]),
-    radialCount:  Math.round(7 + w * 1.2),               // 全方位ばらまきの弾数
-    fanHalf:      w <= 2 ? 2 : 3,                        // 扇状弾幕の広がり
-    // 序盤は避けにくいパターンを出さない
-    patterns:     w <= 1 ? [0, 2] : (w <= 3 ? [0, 1, 2] : [0, 1, 2, 3]),
+    stars: Math.min(2 + Math.floor((n - 1) / 2), 5),   // 隠されたスターの数
+    hardRate: Math.min(0.05 + (n - 1) * 0.05, 0.30),   // かたいブロックの割合
+    bombRate: Math.min(0.03 + (n - 1) * 0.02, 0.12),   // ばくだんブロックの割合
+    rows: 5,
   };
 }
 
@@ -363,20 +356,19 @@ function makeStars() {
 
 /* ---------------- ゲーム状態 ---------------- */
 const G = {
-  mode: 'title',          // title | play | pause | over
+  mode: 'title',          // title | play | pause | clear
   t: 0,
-  wave: 1,
+  stage: 1,
   score: 0,
   players: [],
   bullets: [],            // プレイヤー弾
-  ebullets: [],           // 敵弾
+  gems: [],               // 掘り出されたスター
   parts: [],
-  enemy: null,
+  starsFound: 0,
+  starsTotal: 0,
+  nextT: 0,               // 次のステージまでの秒数
+  stageT: 0,              // このステージの経過時間
   shake: 0,
-  overT: 0,
-  spawnT: 0,              // 次の敵が出るまでの秒数
-  quiz: null,             // 出題中の問題
-  quizCool: 4,            // 次の出題までの秒数
   banner: null,           // {text, life}
 };
 
@@ -394,16 +386,14 @@ function makePlayer(idx) {
     x: W / 2,
     y: bottom ? (Z.bot.y0 + Z.bot.y1) / 2 : (Z.top.y0 + Z.top.y1) / 2,
     tx: W / 2, ty: 0,
-    fx: 0, fy: 0,                        // 指の実座標（機体はここから offset だけ敵側にずれる）
-    hp: 120, maxHp: 120,
+    fx: 0, fy: 0,                        // 指の実座標
     charge: 0, maxCharge: 100,
+    dug: 0,                              // 掘ったブロック数
+    stars: 0,                            // 見つけたスターの数
     cool: 0,
     firing: false,
-    down: false, respawn: 0,
-    invuln: 3,
-    hitFlash: 0,
     pointer: -1,
-    stack: [],                           // その側に触れている指（最後の1本が操作中）
+    stack: [],                           // その側に触れている指（最初の1本が操作中）
   };
 }
 
@@ -444,33 +434,131 @@ function aimFromFinger(p, cx, cy) {
   clampPlayer(p);
 }
 
-function makeEnemy(wave) {
-  const hp = 420 + (wave - 1) * 280;
-  const hue = (200 + wave * 47) % 360;
-  return {
-    x: W / 2, y: Z.cy,
-    r: Math.min(W, H) * 0.075,
-    hp, maxHp: hp,
-    t: rand(0, 10),
-    speed: 0.45 + wave * 0.09,
-    amp: W * 0.30,
-    fireT: wave <= 1 ? 2.8 : 1.6,   // 1WAVE目は撃ち始めるまでの猶予を長く
-    pattern: 0,
-    flash: 0,
-    dying: 0,
-  };
+/* ============================================================
+   ブロック畑
+   中央帯を格子状のブロックで埋め、いくつかのブロックの中に
+   スターを隠す。プレイヤーは上下から掘り進めてスターを探す。
+============================================================ */
+const B_NORMAL = 0, B_HARD = 1, B_BOMB = 2;
+const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[] };
+
+function idxAt(c, r) { return r * FIELD.cols + c; }
+function blockAt(c, r) {
+  if (c < 0 || r < 0 || c >= FIELD.cols || r >= FIELD.rows) return null;
+  return FIELD.grid[idxAt(c, r)];
+}
+function cellCenter(c, r) {
+  return { x: FIELD.x0 + (c + 0.5) * FIELD.cell, y: FIELD.y0 + (r + 0.5) * FIELD.cell };
+}
+
+function makeField(stage) {
+  const S = stageSetup(stage);
+  const bandY0 = Z.top.y1 + H * 0.012;
+  const bandY1 = Z.bot.y0 - H * 0.012;
+  const cell = Math.max(28, (bandY1 - bandY0) / S.rows);
+  // 畑は機体が届く範囲だけに敷く。はみ出すと端の列が永久に掘れなくなる
+  const inset = 20 * SHIP.scale;
+  const cols = Math.max(4, Math.floor((W - inset * 2) / cell));
+
+  FIELD.cell = cell;
+  FIELD.rows = S.rows;
+  FIELD.cols = cols;
+  FIELD.x0 = (W - cols * cell) / 2;
+  FIELD.y0 = bandY0;
+  FIELD.grid = new Array(cols * S.rows);
+
+  for (let i = 0; i < FIELD.grid.length; i++) {
+    const rnd = Math.random();
+    const type = rnd < S.hardRate ? B_HARD : (rnd < S.hardRate + S.bombRate ? B_BOMB : B_NORMAL);
+    FIELD.grid[i] = {
+      type,
+      hp: type === B_HARD ? 70 : 24,
+      maxHp: type === B_HARD ? 70 : 24,
+      star: false,
+      flash: 0,
+    };
+  }
+
+  // スターを重複なく隠す。上下の端の列は序盤で当たりやすいので避ける
+  const pool = [];
+  for (let r = 0; r < S.rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const b = FIELD.grid[idxAt(c, r)];
+      if (b.type !== B_BOMB) pool.push(idxAt(c, r));
+    }
+  }
+  let placed = 0;
+  while (placed < S.stars && pool.length) {
+    const k = Math.floor(rand(0, pool.length));
+    FIELD.grid[pool[k]].star = true;
+    pool.splice(k, 1);
+    placed++;
+  }
+  G.starsTotal = placed;
+  G.starsFound = 0;
+}
+
+// ブロックを壊す。スター入りならスターを出し、ばくだんなら周囲を巻き込む
+function breakBlock(c, r, ownerIdx, depth) {
+  const b = blockAt(c, r);
+  if (!b) return;
+  FIELD.grid[idxAt(c, r)] = null;
+  const pos = cellCenter(c, r);
+  G.score += 10;
+  if (ownerIdx >= 0 && G.players[ownerIdx]) G.players[ownerIdx].dug++;
+
+  if (b.type === B_BOMB) {
+    SFX.bomb();
+    G.shake = Math.max(G.shake, 14);
+    burst(pos.x, pos.y, '#ff8a3c', 26, 340, 7);
+    if ((depth || 0) < 3) {
+      for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
+        if (dc || dr) breakBlock(c + dc, r + dr, ownerIdx, (depth || 0) + 1);
+      }
+    }
+  } else {
+    SFX.blockBreak();
+    burst(pos.x, pos.y, b.type === B_HARD ? '#c9d2e0' : '#7fb2ff', 12, 200, 5);
+  }
+
+  if (b.star) {
+    // 見せてから自動で回収する。ブロックに阻まれて撃てず詰まるのを防ぐ
+    G.gems.push({ x: pos.x, y: pos.y, r: FIELD.cell * 0.30, t: rand(0, 6),
+                  taken: false, life: 0.9, owner: ownerIdx >= 0 ? ownerIdx : 0 });
+    SFX.starFound();
+    burst(pos.x, pos.y, '#ffd54a', 30, 300, 7);
+    G.banner = { text: 'スターはっけん！', life: 1.4 };
+  } else {
+    // 近くにスターがあれば光の粒でそっと知らせる
+    let near = false;
+    for (let dc = -1; dc <= 1 && !near; dc++) {
+      for (let dr = -1; dr <= 1 && !near; dr++) {
+        const n = blockAt(c + dc, r + dr);
+        if (n && n.star) near = true;
+      }
+    }
+    if (near) { burst(pos.x, pos.y, '#ffd54a', 7, 90, 3); SFX.near(); }
+  }
+}
+
+function damageBlock(c, r, dmg, ownerIdx) {
+  const b = blockAt(c, r);
+  if (!b) return false;
+  b.hp -= dmg;
+  b.flash = 1;
+  if (b.hp <= 0) breakBlock(c, r, ownerIdx, 0);
+  else SFX.blockHit();
+  return true;
 }
 
 function resetGame() {
-  G.wave = 1; G.score = 0; G.t = 0;
-  G.bullets.length = 0; G.ebullets.length = 0; G.parts.length = 0;
+  G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
+  G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.players = [makePlayer(0), makePlayer(1)];
-  G.enemy = makeEnemy(1);
-  G.spawnT = 0;
-  G.quiz = null;
-  G.quizCool = 4;
+  makeField(1);
+  G.nextT = 0;
   G.shake = 0;
-  G.banner = { text: 'WAVE 1', life: 1.6 };
+  G.banner = { text: 'ステージ 1', life: 1.6 };
   pointers.clear();
 }
 
@@ -521,11 +609,8 @@ function onDown(e) {
     // 最初のタップ＝ユーザー操作なので、ここでしか全画面には入れない
     if (FS.supported && !isFullscreen()) enterFullscreen();
     resetGame(); G.mode = 'play';
-    SFX.wave();
+    SFX.stage();
     // return せず、この指をそのまま操作に使う（指を置き直さなくて済む）
-  } else if (G.mode === 'over') {
-    if (G.overT <= 0.8) return;
-    resetGame(); G.mode = 'play';
   }
 
   const idx = playerForY(ey);
@@ -634,52 +719,6 @@ function playerShoot(p) {
   }
 }
 
-function enemyShoot(en) {
-  const alive = G.players.filter(p => !p.down);
-  if (!alive.length) return;
-  const D = difficulty();
-  const pat = en.pattern;
-  const spd = D.bulletSpeed;
-  const dmg = (base) => Math.max(3, Math.round(base * D.dmgScale));
-
-  const push = (ang, s, r, d) => {
-    G.ebullets.push({ x:en.x, y:en.y, vx:Math.cos(ang)*s, vy:Math.sin(ang)*s, r:r||8, dmg:d||8, t:0 });
-  };
-
-  if (pat === 0) {
-    // 狙い撃ち（序盤は単発、WAVEが進むと3way）
-    for (const p of alive) {
-      const base = Math.atan2(p.y - en.y, p.x - en.x);
-      for (const d of D.aimSpread) push(base + d, spd * 1.15, 8, dmg(12));
-    }
-  } else if (pat === 1) {
-    // 全方位ばらまき
-    const n = D.radialCount;
-    const off = rand(0, TAU);
-    for (let i = 0; i < n; i++) push(off + i / n * TAU, spd * 0.8, 9, dmg(14));
-  } else if (pat === 2) {
-    // 上下へ扇状の弾幕
-    const half = D.fanHalf;
-    for (const dir of [-1, 1]) {
-      for (let i = -half; i <= half; i++) {
-        push(dir > 0 ? Math.PI/2 + i*0.19 : -Math.PI/2 + i*0.19, spd, 7, dmg(10));
-      }
-    }
-  } else {
-    // 回転レーザー粒
-    for (let k = 0; k < 3; k++) {
-      const a = en.t * 2.2 + k / 3 * TAU;
-      push(a, spd * 1.3, 6, dmg(9));
-      push(a + Math.PI, spd * 1.3, 6, dmg(9));
-    }
-  }
-  SFX.eshot();
-  en.fireT = D.fireInterval * rand(0.85, 1.2);
-  // 使ってよいパターンの中から次を選ぶ
-  const pool = D.patterns;
-  en.pattern = pool[Math.floor(rand(0, pool.length))];
-}
-
 /* ---------------- 更新 ---------------- */
 function update(dt) {
   G.t += dt;
@@ -691,7 +730,7 @@ function update(dt) {
 
   for (const s of stars) { s.y += s.s * dt; if (s.y > H) { s.y = 0; s.x = rand(0, W); } }
 
-  if (G.mode !== 'play') { if (G.mode === 'over') G.overT += dt; updateParts(dt); return; }
+  if (G.mode !== 'play') { updateParts(dt); return; }
 
   /* --- プレイヤー --- */
   for (const p of G.players) {
@@ -702,22 +741,7 @@ function update(dt) {
     const act = p.stack.length ? p.stack[0] : -1;
     if (act !== p.pointer) {
       p.pointer = act;
-      p.firing = act !== -1 && !p.down;
-    }
-
-    p.hitFlash = Math.max(0, p.hitFlash - dt * 3);
-    p.invuln = Math.max(0, p.invuln - dt);
-
-    if (p.down) {
-      p.respawn -= dt;
-      if (p.respawn <= 0) {
-        p.down = false; p.hp = Math.round(p.maxHp * 0.7); p.invuln = 3; p.charge = 0;
-        if (p.pointer !== -1) p.firing = true;   // 指を置いたままなら復活と同時に射撃再開
-        SFX.revive();
-        burst(p.x, p.y, P_COLORS[p.idx].main, 26, 240, 5);
-        G.banner = { text: P_COLORS[p.idx].name + ' REVIVED', life: 1.2 };
-      }
-      continue;
+      p.firing = act !== -1;
     }
 
     // 指の位置へ滑らかに追従（そのままだとカクつくので補間）
@@ -732,66 +756,85 @@ function update(dt) {
     if (p.firing && p.cool <= 0) playerShoot(p);
   }
 
-  /* --- 次のWAVEの敵を出す --- */
-  if (!G.enemy && G.spawnT > 0) {
-    G.spawnT -= dt;
-    if (G.spawnT <= 0) { G.spawnT = 0; G.enemy = makeEnemy(G.wave); }
+  /* --- ステージ進行 --- */
+  G.stageT += dt;
+  if (G.nextT > 0) {
+    G.nextT -= dt;
+    if (G.nextT <= 0) {
+      G.nextT = 0;
+      G.stage++;
+      G.bullets.length = 0;
+      makeField(G.stage);
+      G.banner = { text: 'ステージ ' + G.stage, life: 1.6 };
+      SFX.stage();
+    }
   }
 
-  /* --- 敵 --- */
-  const en = G.enemy;
-  if (en) {
-    en.t += dt;
-    en.flash = Math.max(0, en.flash - dt * 4);
-    en.x = W/2 + Math.sin(en.t * en.speed) * en.amp * (0.6 + 0.4*Math.sin(en.t*0.31));
-    en.y = Z.cy + Math.sin(en.t * 1.6) * H * 0.02;   // クイズの表示領域を空けるため揺れは控えめ
-    en.fireT -= dt;
-    if (en.fireT <= 0) enemyShoot(en);
-  }
+  /* --- ブロックの点滅 --- */
+  for (const b of FIELD.grid) if (b && b.flash > 0) b.flash = Math.max(0, b.flash - dt * 5);
 
   /* --- プレイヤー弾 --- */
   for (let i = G.bullets.length - 1; i >= 0; i--) {
     const b = G.bullets[i];
     b.y += b.vy * dt;
     if (b.y < -40 || b.y > H + 40) { G.bullets.splice(i, 1); continue; }
-    if (en && en.hp > 0) {
-      const dx = b.x - en.x, dy = b.y - en.y;
-      if (dx*dx + dy*dy < (en.r + b.r) * (en.r + b.r)) {
-        en.hp -= b.dmg; en.flash = 1;
-        SFX.hit();
-        G.score += Math.round(b.dmg);
-        const p = G.players[b.owner];
-        p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.55);
-        burst(b.x, b.y, b.color, b.pierce ? 14 : 5, b.pierce ? 300 : 150, b.pierce ? 6 : 3.5);
-        if (!b.pierce) G.bullets.splice(i, 1);
-        if (en.hp <= 0) { defeatEnemy(en); break; }
-      }
+
+    // スターに当たったら回収
+    let hitGem = false;
+    for (const g of G.gems) {
+      if (g.taken) continue;
+      const dx = b.x - g.x, dy = b.y - g.y, rr = g.r + b.r;
+      if (dx * dx + dy * dy < rr * rr) { collectGem(g, b.owner); hitGem = true; break; }
+    }
+    if (hitGem && !b.pierce) { G.bullets.splice(i, 1); continue; }
+
+    // ブロックに当たったら削る
+    const c = Math.floor((b.x - FIELD.x0) / FIELD.cell);
+    const r = Math.floor((b.y - FIELD.y0) / FIELD.cell);
+    const blk = blockAt(c, r);
+    if (blk) {
+      const p = G.players[b.owner];
+      if (p) p.charge = Math.min(p.maxCharge, p.charge + b.dmg * 0.5);
+      damageBlock(c, r, b.dmg, b.owner);
+      burst(b.x, b.y, b.color, b.pierce ? 8 : 4, b.pierce ? 220 : 130, b.pierce ? 5 : 3);
+      if (!b.pierce) { G.bullets.splice(i, 1); continue; }
     }
   }
 
-  /* --- 敵弾 --- */
-  for (let i = G.ebullets.length - 1; i >= 0; i--) {
-    const e = G.ebullets[i];
-    e.t += dt;
-    e.x += e.vx * dt; e.y += e.vy * dt;
-    if (e.x < -40 || e.x > W + 40 || e.y < -40 || e.y > H + 40) { G.ebullets.splice(i, 1); continue; }
-    for (const p of G.players) {
-      if (p.down || p.invuln > 0) continue;
-      const dx = e.x - p.x, dy = e.y - p.y, rr = e.r + SHIP.hit;
-      if (dx*dx + dy*dy < rr*rr) {
-        p.hp -= e.dmg; p.hitFlash = 1;
-        SFX.playerHit();
-        G.shake = Math.max(G.shake, 6);
-        burst(e.x, e.y, '#ff9a3c', 10, 200, 4);
-        G.ebullets.splice(i, 1);
-        if (p.hp <= 0) downPlayer(p);
-        break;
-      }
+  /* --- 掘り出されたスター --- */
+  for (let i = G.gems.length - 1; i >= 0; i--) {
+    const g = G.gems[i];
+    g.t += dt;
+    if (!g.taken) {
+      g.life -= dt;
+      if (g.life <= 0) collectGem(g, g.owner);     // 撃たなくても自動で手に入る
+    } else {
+      g.take -= dt;
+      if (g.take <= 0) G.gems.splice(i, 1);
     }
   }
 
   updateParts(dt);
   bgmUpdate();
+}
+
+function collectGem(g, ownerIdx) {
+  if (g.taken) return;
+  g.taken = true; g.take = 0.5;
+  G.starsFound++;
+  G.score += 1000;
+  const p = G.players[ownerIdx];
+  if (p) { p.stars++; p.charge = p.maxCharge; }
+  SFX.starGet();
+  burst(g.x, g.y, '#ffd54a', 40, 380, 8);
+  G.shake = Math.max(G.shake, 10);
+
+  if (G.starsFound >= G.starsTotal) {
+    G.score += 500 * G.stage;
+    G.banner = { text: 'ステージ クリア！', life: 2.0 };
+    SFX.clear();
+    G.nextT = 2.2;
+  }
 }
 
 function updateParts(dt) {
@@ -802,33 +845,6 @@ function updateParts(dt) {
     p.x += p.vx * dt; p.y += p.vy * dt;
     p.vx *= Math.pow(0.15, dt); p.vy *= Math.pow(0.15, dt);
   }
-}
-
-function downPlayer(p) {
-  p.hp = 0; p.down = true; p.respawn = 4; p.firing = false; p.charge = 0;
-  burst(p.x, p.y, P_COLORS[p.idx].main, 40, 420, 7);
-  SFX.down();
-  G.shake = Math.max(G.shake, 16);
-  if (G.players.every(q => q.down)) {
-    G.mode = 'over'; G.overT = 0;
-  } else {
-    G.banner = { text: P_COLORS[p.idx].name + ' DOWN — 4s', life: 1.6 };
-  }
-}
-
-function defeatEnemy(en) {
-  G.score += 1000 * G.wave;
-  burst(en.x, en.y, '#fff', 70, 620, 9);
-  burst(en.x, en.y, '#ffb300', 50, 420, 12);
-  SFX.boom();
-  G.shake = 26;
-  G.ebullets.length = 0;
-  G.enemy = null;
-  G.wave++;
-  for (const p of G.players) if (!p.down) p.hp = Math.min(p.maxHp, p.hp + 45);
-  G.banner = { text: 'WAVE ' + G.wave, life: 1.8 };
-  SFX.wave();
-  G.spawnT = 1.5;   // setTimeout はタブが裏に回ると止まるのでゲーム内時間で数える
 }
 
 /* ---------------- 描画 ---------------- */
@@ -850,10 +866,10 @@ function draw() {
   drawArena();
 
   if (G.mode !== 'title') {
-    if (G.enemy) drawEnemy(G.enemy);
+    drawField();
+    drawGems();
     for (const b of G.bullets) drawBullet(b);
-    for (const e of G.ebullets) drawEBullet(e);
-    for (const p of G.players) if (!p.down) drawShip(p);
+    for (const p of G.players) drawShip(p);
     drawParts();
     drawHUD();
   } else {
@@ -864,7 +880,6 @@ function draw() {
 
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'pause') drawPauseOverlay();
-  if (G.mode === 'over')  drawOver();
   if (G.banner) drawBanner(G.banner);
   // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
   drawFsButton();
@@ -878,7 +893,7 @@ function drawArena() {
   const bandH = H * 0.2;
   const bg = ctx.createLinearGradient(0, Z.cy - bandH, 0, Z.cy + bandH);
   bg.addColorStop(0, 'rgba(255,255,255,0)');
-  bg.addColorStop(0.5, 'rgba(255,120,60,0.07)');
+  bg.addColorStop(0.5, 'rgba(90,150,255,0.07)');
   bg.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = bg;
   ctx.fillRect(0, Z.cy - bandH, W, bandH * 2);
@@ -964,43 +979,86 @@ function drawShip(p) {
   ctx.restore();
 }
 
-function drawEnemy(en) {
+function drawField() {
+  const cell = FIELD.cell;
+  if (!cell) return;
   ctx.save();
-  ctx.translate(en.x, en.y);
-  const hue = (200 + G.wave * 47) % 360;
-  const col = `hsl(${hue},90%,62%)`;
+  for (let r = 0; r < FIELD.rows; r++) {
+    for (let c = 0; c < FIELD.cols; c++) {
+      const b = FIELD.grid[idxAt(c, r)];
+      if (!b) continue;
+      const x = FIELD.x0 + c * cell, y = FIELD.y0 + r * cell;
+      const pad = cell * 0.055;
+      const w = cell - pad * 2;
+      const wear = b.hp / b.maxHp;             // 削れるほど暗く小さくなる
 
-  ctx.shadowColor = col; ctx.shadowBlur = 30;
-  ctx.fillStyle = en.flash > 0 ? '#fff' : col;
+      let base, edge;
+      if (b.type === B_HARD)      { base = '#8992a6'; edge = '#c3ccdb'; }
+      else if (b.type === B_BOMB) { base = '#9c3140'; edge = '#ff7d6b'; }
+      else                        { base = '#2f5f9e'; edge = '#7fb2ff'; }
 
-  // 回転するコア
-  ctx.save();
-  ctx.rotate(en.t * 0.7);
-  ctx.beginPath();
-  const spikes = 6 + (G.wave % 4);
-  for (let i = 0; i < spikes * 2; i++) {
-    const r = i % 2 === 0 ? en.r : en.r * 0.55;
-    const a = i / (spikes * 2) * TAU;
-    ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r);
+      ctx.globalAlpha = 0.45 + 0.55 * wear;
+      ctx.fillStyle = b.flash > 0 ? '#ffffff' : base;
+      roundRect(ctx, x + pad, y + pad, w, w, cell * 0.16);
+      ctx.fill();
+
+      ctx.globalAlpha = (0.5 + 0.5 * wear) * 0.9;
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 2;
+      roundRect(ctx, x + pad, y + pad, w, w, cell * 0.16);
+      ctx.stroke();
+
+      if (b.type === B_BOMB) {                 // ばくだんは一目で分かるように
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#ffd7cf';
+        ctx.beginPath(); ctx.arc(x + cell / 2, y + cell / 2, cell * 0.13, 0, TAU); ctx.fill();
+      } else if (b.type === B_HARD) {          // かたいブロックは鋲を打つ
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = edge;
+        for (const [ox, oy] of [[-1,-1],[1,-1],[-1,1],[1,1]]) {
+          ctx.beginPath();
+          ctx.arc(x + cell / 2 + ox * w * 0.32, y + cell / 2 + oy * w * 0.32, cell * 0.045, 0, TAU);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
   }
-  ctx.closePath(); ctx.fill();
   ctx.restore();
+}
 
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(10,0,20,0.85)';
-  ctx.beginPath(); ctx.arc(0, 0, en.r * 0.4, 0, TAU); ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.globalAlpha = 0.7 + 0.3 * Math.sin(en.t * 6);
-  ctx.beginPath(); ctx.arc(0, 0, en.r * 0.2, 0, TAU); ctx.fill();
-  ctx.globalAlpha = 1;
+function drawGems() {
+  ctx.save();
+  for (const g of G.gems) {
+    const pop = g.taken ? 1 + (0.5 - g.take) * 2.4 : 1;
+    const a   = g.taken ? Math.max(0, g.take / 0.5) : 1;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(g.x, g.y);
+    ctx.rotate(Math.sin(g.t * 1.6) * 0.25);
+    ctx.scale(pop, pop);
+    ctx.shadowColor = '#ffd54a';
+    ctx.shadowBlur = 26 + Math.sin(g.t * 5) * 8;
+    ctx.fillStyle = '#ffd54a';
+    star5(ctx, g.r);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff6c8';
+    star5(ctx, g.r * 0.5);
+    ctx.fill();
+    ctx.restore();
+  }
   ctx.restore();
+}
 
-  // 敵HPバー（画面幅いっぱい・中央）
-  const bw = W * 0.7, bx = (W - bw) / 2, by = Z.cy - H * 0.115;
-  ctx.fillStyle = 'rgba(255,255,255,0.12)';
-  roundRect(ctx, bx, by, bw, 8, 4); ctx.fill();
-  ctx.fillStyle = col;
-  roundRect(ctx, bx, by, bw * Math.max(0, en.hp / en.maxHp), 8, 4); ctx.fill();
+function star5(c, r) {
+  c.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    c[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  c.closePath();
 }
 
 function drawBullet(b) {
@@ -1015,16 +1073,6 @@ function drawBullet(b) {
   } else {
     ctx.beginPath(); ctx.ellipse(b.x, b.y, b.r * 0.7, b.r * 2.2, 0, 0, TAU); ctx.fill();
   }
-  ctx.restore();
-}
-
-function drawEBullet(e) {
-  ctx.save();
-  ctx.shadowColor = '#ff7a2f'; ctx.shadowBlur = 14;
-  ctx.fillStyle = '#ffd08a';
-  ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill();
-  ctx.fillStyle = '#ff4d1a';
-  ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.55, 0, TAU); ctx.fill();
   ctx.restore();
 }
 
@@ -1139,45 +1187,38 @@ function drawParts() {
 function drawHUD() {
   for (const p of G.players) drawPlayerHUD(p);
 
-  // 中央のスコア／WAVE（両側から読めるよう2方向に描画）
+  // 中央に進捗（両側から読めるよう2方向に描画）
   for (const flip of [0, 1]) {
     ctx.save();
-    ctx.translate(W / 2, Z.cy + (flip ? -1 : 1) * H * 0.145);
+    ctx.translate(W / 2, Z.cy + (flip ? -1 : 1) * (FIELD.cell * FIELD.rows / 2 + 22));
     if (flip) ctx.rotate(Math.PI);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '600 13px system-ui, sans-serif';
-    ctx.fillText(`WAVE ${G.wave}   SCORE ${G.score}`, 0, 0);
+    ctx.fillStyle = 'rgba(255,255,255,0.62)';
+    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.fillText(`ステージ ${G.stage}   ★ ${G.starsFound} / ${G.starsTotal}   ${G.score}`, 0, 0);
     ctx.restore();
   }
 }
 
 function drawPlayerHUD(p) {
   const c = P_COLORS[p.idx];
-  const barW = Math.min(W * 0.42, 300), barH = 12;
-  const y = p.bottom ? H - 34 : 22;
+  const barW = Math.min(W * 0.42, 300);
+  const y = p.bottom ? H - 30 : 20;
 
   ctx.save();
   ctx.translate(W / 2, y);
   if (!p.bottom) ctx.rotate(Math.PI);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
-  // HP
-  ctx.fillStyle = 'rgba(255,255,255,0.13)';
-  roundRect(ctx, -barW / 2, -barH / 2, barW, barH, 6); ctx.fill();
-  ctx.fillStyle = p.hp > 35 ? c.main : '#ff4d5e';
-  roundRect(ctx, -barW / 2, -barH / 2, barW * clamp(p.hp / p.maxHp, 0, 1), barH, 6); ctx.fill();
-
-  // チャージ
-  const cy2 = barH / 2 + 7;
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  roundRect(ctx, -barW / 2, cy2, barW, 5, 3); ctx.fill();
-  ctx.fillStyle = p.charge >= p.maxCharge ? '#fff' : 'rgba(255,255,255,0.55)';
-  roundRect(ctx, -barW / 2, cy2, barW * (p.charge / p.maxCharge), 5, 3); ctx.fill();
+  // チャージ（満タンで貫通ビーム）
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  roundRect(ctx, -barW / 2, -3, barW, 6, 3); ctx.fill();
+  ctx.fillStyle = p.charge >= p.maxCharge ? '#fff' : c.main;
+  roundRect(ctx, -barW / 2, -3, barW * (p.charge / p.maxCharge), 6, 3); ctx.fill();
 
   ctx.fillStyle = c.main;
   ctx.font = '700 12px system-ui, sans-serif';
-  ctx.fillText(p.down ? `RESPAWN ${p.respawn.toFixed(1)}` : c.name, 0, -barH - 8);
+  ctx.fillText(`${c.name}   ★${p.stars}   ブロック ${p.dug}`, 0, -16);
   ctx.restore();
 }
 
@@ -1210,14 +1251,14 @@ function drawTitle() {
     ctx.fillStyle = '#fff';
     ctx.shadowColor = '#31e6ff'; ctx.shadowBlur = 26;
     ctx.font = '900 46px system-ui, sans-serif';
-    ctx.fillText('TWIN BEAM', 0, -46);
+    ctx.fillText('STAR DIGGERS', 0, -46);
     ctx.shadowBlur = 0;
 
     ctx.fillStyle = 'rgba(255,255,255,0.78)';
     ctx.font = '600 15px system-ui, sans-serif';
-    ctx.fillText('自分側のエリアを指でなぞって移動 / 触れている間は連射', 0, 6);
-    ctx.fillText('機体は指より少し前に出るので、指で隠れません', 0, 28);
-    ctx.fillText('ダメージでチャージが溜まると自動で貫通ビーム', 0, 50);
+    ctx.fillText('まんなかのブロックをこわして ★ をさがそう', 0, 6);
+    ctx.fillText('自分のエリアを指でなぞって移動 / さわっている間は連射', 0, 28);
+    ctx.fillText('★ の近くを掘ると光の粒が出ます', 0, 50);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.fillText('2人同時プレイ対応 — 上側と下側を別々の指で操作できます', 0, 76);
     ctx.fillText(FS.supported
@@ -1228,33 +1269,6 @@ function drawTitle() {
     ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
     ctx.font = '800 20px system-ui, sans-serif';
     ctx.fillText('TAP TO START', 0, 138);
-    ctx.restore();
-  }
-  ctx.restore();
-}
-
-function drawOver() {
-  ctx.save();
-  ctx.fillStyle = 'rgba(20,0,8,0.75)';
-  ctx.fillRect(0, 0, W, H);
-  for (const flip of [0, 1]) {
-    ctx.save();
-    ctx.translate(W / 2, flip ? H * 0.3 : H * 0.7);
-    if (flip) ctx.rotate(Math.PI);
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ff5c6e';
-    ctx.shadowColor = '#f03'; ctx.shadowBlur = 24;
-    ctx.font = '900 42px system-ui, sans-serif';
-    ctx.fillText('GAME OVER', 0, -30);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#fff';
-    ctx.font = '700 22px system-ui, sans-serif';
-    ctx.fillText(`WAVE ${G.wave}   SCORE ${G.score}`, 0, 14);
-    if (G.overT > 0.8) {
-      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(G.t * 4);
-      ctx.font = '700 17px system-ui, sans-serif';
-      ctx.fillText('TAP TO RETRY', 0, 52);
-    }
     ctx.restore();
   }
   ctx.restore();
