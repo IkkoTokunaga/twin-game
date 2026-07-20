@@ -16,9 +16,26 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,zoneRect};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,zoneRect}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
+
+// 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
+// 端の列を撃ち残すことがあり、人間の遊び方とも違うため。
+function aimFinger(bottom, tick) {
+  const rc = zoneRect(bottom);
+  const cols = [];
+  for (let c = 0; c < FIELD.cols; c++) {
+    for (let r = 0; r < FIELD.rows; r++) {
+      if (FIELD.grid[idxAt(c, r)]) { cols.push(c); break; }
+    }
+  }
+  if (!cols.length) return 400;
+  const col = cols[Math.floor(tick / 18) % cols.length];       // 残っている列を順に狙う
+  const tx = FIELD.x0 + (col + 0.5) * FIELD.cell;
+  const u = (tx - rc.x0) / Math.max(1, rc.x1 - rc.x0);         // 指の位置へ逆変換
+  return 26 + u * (800 - 52);
+}
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
 
@@ -137,6 +154,29 @@ check('畑が中央帯に収まる',
         lv2.r > lv1.r && lv2.dmg > lv1.dmg && lv2.pierceLeft > lv1.pierceLeft,
         `Lv1(r${lv1.r} 威力${lv1.dmg} 貫通${lv1.pierceLeft}) -> Lv2(r${lv2.r} 威力${lv2.dmg} 貫通${lv2.pierceLeft})`);
 
+  // --- ダメージを受けると1段階下がる ---
+  p.beam = 2; p.stun = 0;
+  explode(p.x, p.y);
+  check('ダメージを受けるとビームが1段階下がる', p.beam === 1, `beam=${p.beam}`);
+  check('同時に動けなくなる', p.stun > 0, `stun=${p.stun}`);
+
+  // 連鎖爆発で一気に丸裸にならないこと（動けない間は重ねて下がらない）
+  explode(p.x, p.y);
+  explode(p.x, p.y);
+  check('動けない間は重ねて下がらない', p.beam === 1, `beam=${p.beam}`);
+
+  // 解除してからもう一度当たれば下がる
+  for (let i = 0; i < 60 * 4 && p.stun > 0; i++) update(1/60);
+  p.x = 400; p.y = Z.bot.y0 + 40;
+  explode(p.x, p.y);
+  check('解除後に当たればまた下がる', p.beam === 0, `beam=${p.beam}`);
+
+  // Lv1より下がらない
+  for (let i = 0; i < 60 * 4 && p.stun > 0; i++) update(1/60);
+  explode(p.x, p.y);
+  check('Lv1より下には下がらない', p.beam === 0, `beam=${p.beam}`);
+  for (let i = 0; i < 60 * 4 && p.stun > 0; i++) update(1/60);
+
   // 上限
   p.beam = BEAM_LEVELS.length - 1;
   const before = p.beam;
@@ -223,7 +263,7 @@ check('畑が中央帯に収まる',
   let cleared = false, soloFrames = 0;
   for (let i = 0; i < 60 * 240; i++) {
     soloFrames = i;
-    onMove(ev(81, 26 + (i * 9) % (800 - 52), 900 + (i % 200)));
+    onMove(ev(81, aimFinger(true, i), 900 + (i % 200)));
     update(1/60); draw();
     if (G.stage >= 2) { cleared = true; break; }
   }
@@ -333,9 +373,8 @@ onDown(ev(2,400,200));
 let frames=0, cleared=0, maxStage=1, chipSeen=0, bugSeen=0;
 for(let i=0;i<60*180;i++){                    // 3分ぶん
   frames++;
-  const x=26+ (i*9)%(800-52);
-  onMove(ev(1,x,900+ (i%200)));
-  onMove(ev(2,800-x,300-(i%200)));
+  onMove(ev(1, aimFinger(true, i), 900 + (i % 200)));
+  onMove(ev(2, aimFinger(false, i + 9), 300 - (i % 200)));
   update(1/60); draw();
   if(G.stage>maxStage){maxStage=G.stage; cleared++;}
   chipSeen=Math.max(chipSeen,G.chips.length);
