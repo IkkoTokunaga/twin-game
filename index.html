@@ -39,19 +39,19 @@ const Z = { top:{y0:0,y1:0}, bot:{y0:0,y1:0}, cy:0 };
 
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  // 全画面移行直後は innerWidth/Height の更新が遅れる端末があるため
-  // visualViewport が使えるならそちらを優先する
-  const vv = window.visualViewport;
-  W = Math.round(vv ? vv.width  : window.innerWidth);
-  H = Math.round(vv ? vv.height : window.innerHeight);
+  // 必ずレイアウトビューポートを使う。visualViewport はピンチ操作で縮むため、
+  // それに合わせてキャンバスを作り直すと clientX/clientY と座標系がずれて操作不能になる。
+  const de = document.documentElement;
+  W = Math.round(window.innerWidth  || de.clientWidth);
+  H = Math.round(window.innerHeight || de.clientHeight);
   cv.width  = Math.round(W * DPR);
   cv.height = Math.round(H * DPR);
   cv.style.width  = W + 'px';
   cv.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-  Z.top.y0 = H * 0.06;  Z.top.y1 = H * 0.37;
-  Z.bot.y0 = H * 0.63;  Z.bot.y1 = H * 0.94;
+  Z.top.y0 = H * 0.06;  Z.top.y1 = H * 0.35;
+  Z.bot.y0 = H * 0.65;  Z.bot.y1 = H * 0.94;
   Z.cy = H / 2;
   // 全画面ボタンは中央帯の右端＝どちらのプレイヤーの操作エリアにも掛からない位置
   FS.btn.x = W - 36;
@@ -63,13 +63,28 @@ function resize() {
   AU.btn.x = 36;
   AU.btn.y = Z.cy;
 
+  updateRect();
   makeStars();
   for (const p of G.players) clampPlayer(p);
   if (G.enemy) { G.enemy.x = Math.min(Math.max(G.enemy.x, W*0.2), W*0.8); }
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
-if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+// キャンバスの実表示位置。ページが拡大・スクロールされても入力座標を正しく戻すために使う
+const rect = { left: 0, top: 0, sx: 1, sy: 1 };
+function updateRect() {
+  const r = cv.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  rect.left = r.left; rect.top = r.top;
+  rect.sx = W / r.width; rect.sy = H / r.height;
+}
+// ピンチで拡大されてもキャンバスは作り直さず、座標の変換だけ追従させる
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', updateRect);
+  window.visualViewport.addEventListener('scroll', updateRect);
+}
+const localX = (e) => (e.clientX - rect.left) * rect.sx;
+const localY = (e) => (e.clientY - rect.top)  * rect.sy;
 
 /* ---------------- 全画面 ---------------- */
 const FS = {
@@ -240,6 +255,16 @@ const SFX = {
       tone({ f, type:'triangle', dur:0.28, vol:0.16, delay:i * 0.09 }));
   },
   revive() { tone({ f:300, f2:900, type:'triangle', dur:0.3, vol:0.2 }); },
+  correct() {
+    [523, 659, 784, 1047].forEach((f, i) =>
+      tone({ f, type:'triangle', dur:0.22, vol:0.2, delay:i * 0.07 }));
+  },
+  wrong() {
+    tone({ f:200, f2:110, type:'sawtooth', dur:0.28, vol:0.14 });
+  },
+  quizStart() {
+    [660, 880].forEach((f, i) => tone({ f, type:'triangle', dur:0.16, vol:0.15, delay:i * 0.1 }));
+  },
   ui()     { tone({ f:620, f2:930, type:'triangle', dur:0.08, vol:0.13 }); },
 };
 
@@ -336,6 +361,8 @@ const G = {
   shake: 0,
   overT: 0,
   spawnT: 0,              // 次の敵が出るまでの秒数
+  quiz: null,             // 出題中の問題
+  quizCool: 4,            // 次の出題までの秒数
   banner: null,           // {text, life}
 };
 
@@ -407,6 +434,8 @@ function resetGame() {
   G.players = [makePlayer(0), makePlayer(1)];
   G.enemy = makeEnemy(1);
   G.spawnT = 0;
+  G.quiz = null;
+  G.quizCool = 4;
   G.shake = 0;
   G.banner = { text: 'WAVE 1', life: 1.6 };
   pointers.clear();
@@ -423,8 +452,9 @@ function onDown(e) {
   e.preventDefault();
 
   // 各種ボタンは最優先で判定（機体の移動・射撃には渡さない）
+  const ex = localX(e), ey = localY(e);
   const onBtn = (b) => {
-    const dx = e.clientX - b.x, dy = e.clientY - b.y, hit = b.r + 10;
+    const dx = ex - b.x, dy = ey - b.y, hit = b.r + 10;
     return dx * dx + dy * dy < hit * hit;
   };
   if (FS.supported && onBtn(FS.btn)) { audioResume(); SFX.ui(); toggleFullscreen(); return; }
@@ -449,28 +479,28 @@ function onDown(e) {
     resetGame(); G.mode = 'play';
   }
 
-  const idx = playerForY(e.clientY);
+  const idx = playerForY(ey);
   const p = G.players[idx];
   if (!p) return;
 
   // 明示的にキャプチャして、指が画面端に出ても追跡が切れないようにする
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
 
-  pointers.set(e.pointerId, { idx, x: e.clientX, y: e.clientY });
+  pointers.set(e.pointerId, { idx, x: ex, y: ey });
   p.stack.push(e.pointerId);        // 同じ側を複数の指で触っても取りこぼさない
   p.pointer = e.pointerId;
   p.firing = true;
-  aimFromFinger(p, e.clientX, e.clientY);
+  aimFromFinger(p, ex, ey);
 }
 
 function onMove(e) {
   const rec = pointers.get(e.pointerId);
   if (!rec) return;
   e.preventDefault();
-  rec.x = e.clientX; rec.y = e.clientY;
+  rec.x = localX(e); rec.y = localY(e);
   const p = G.players[rec.idx];
   // 操作中の指だけが機体を動かす（同じ側の他の指は位置だけ覚えておく）
-  if (p && p.pointer === e.pointerId) aimFromFinger(p, e.clientX, e.clientY);
+  if (p && p.pointer === e.pointerId) aimFromFinger(p, rec.x, rec.y);
 }
 
 function onUp(e) {
@@ -511,7 +541,9 @@ cv.addEventListener('pointercancel', onUp,    { passive:false });
 window.addEventListener('blur', releaseAllPointers);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllPointers(); });
 cv.addEventListener('contextmenu', e => e.preventDefault());
-document.addEventListener('gesturestart', e => e.preventDefault());
+for (const g of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(g, e => e.preventDefault());
+}
 document.addEventListener('touchmove', e => e.preventDefault(), { passive:false });
 
 /* ---------------- エフェクト ---------------- */
@@ -653,7 +685,7 @@ function update(dt) {
     en.t += dt;
     en.flash = Math.max(0, en.flash - dt * 4);
     en.x = W/2 + Math.sin(en.t * en.speed) * en.amp * (0.6 + 0.4*Math.sin(en.t*0.31));
-    en.y = Z.cy + Math.sin(en.t * 1.6) * H * 0.035;
+    en.y = Z.cy + Math.sin(en.t * 1.6) * H * 0.02;   // クイズの表示領域を空けるため揺れは控えめ
     en.fireT -= dt;
     if (en.fireT <= 0) enemyShoot(en);
   }
@@ -1132,13 +1164,24 @@ function drawOver() {
 
 /* ---------------- メインループ ---------------- */
 let last = performance.now();
+let errCount = 0;
 function frame(now) {
+  // 何が起きても次のフレームは必ず予約する。
+  // ここで例外が抜けると requestAnimationFrame が途切れ、画面が完全に固まるため。
+  requestAnimationFrame(frame);
+
   let dt = (now - last) / 1000;
   last = now;
   if (dt > 0.05) dt = 0.05;      // タブ復帰時の飛びを抑制
-  update(dt);
-  draw();
-  requestAnimationFrame(frame);
+
+  try {
+    update(dt);
+    draw();
+  } catch (err) {
+    if (++errCount <= 3) console.error('frame error:', err);
+    // 壊れた状態を引きずらないよう、続くようならタイトルに戻す
+    if (errCount === 20) { errCount = 0; G.mode = 'title'; releaseAllPointers(); }
+  }
 }
 
 resize();

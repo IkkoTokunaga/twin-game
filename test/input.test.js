@@ -12,10 +12,13 @@ const ctxStub = new Proxy({}, { get: (t, k) => {
   if (k === 'canvas') return {};
   return noop;
 }});
+// ピンチ拡大やスクロールを再現するために差し替えられるようにしておく
+let pageRect = { left:0, top:0, width:800, height:1200 };
 const listeners = {};
 const el = { addEventListener:(t,f)=>{(listeners[t]=listeners[t]||[]).push(f)},
              getContext:()=>ctxStub, style:{}, width:0, height:0,
-             setPointerCapture:noop, releasePointerCapture:noop };
+             setPointerCapture:noop, releasePointerCapture:noop,
+             getBoundingClientRect:()=>pageRect };
 global.document = { getElementById:()=>el, addEventListener:noop, documentElement:{},
                     fullscreenElement:null, hidden:false };
 global.window = { innerWidth:800, innerHeight:1200, devicePixelRatio:2,
@@ -26,8 +29,8 @@ global.performance = { now: () => Date.now() };
 global.requestAnimationFrame = noop;
 global.setTimeout = noop;
 
-const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP};')();
-const { onDown, onMove, onUp, update, G, pointers, Z } = api;
+const api = new Function(src + '\n;return {onDown,onMove,onUp,update,G,pointers,Z,SHIP,updateRect};')();
+const { onDown, onMove, onUp, update, G, pointers, Z, updateRect } = api;
 
 const ev = (id, x, y) => ({ pointerId:id, clientX:x, clientY:y, preventDefault:noop });
 const BOT = 1000, TOP = 200;   // 画面高1200 → 中央600
@@ -78,6 +81,19 @@ onUp(ev(9, 700, TOP));
 check('全部離すと停止', G.players[1].firing === false && pointers.size === 0);
 onDown(ev(5, 400, TOP));
 check('再タップで復帰', G.players[1].pointer === 5 && G.players[1].firing === true);
+
+// --- ピンチで拡大・スクロールされても座標が壊れない ---
+onUp(ev(5, 400, TOP));
+pageRect = { left:-100, top:-200, width:1600, height:2400 };   // 2倍に拡大してずれた状態
+updateRect();
+onDown(ev(7, 300, 1400));                 // 変換後: x=(300+100)/2=200, y=(1400+200)/2=800 → 下側
+check('拡大中でもタップ位置が正しく変換される',
+      G.players[0].pointer === 7 && Math.round(G.players[0].tx) === 200,
+      `tx=${G.players[0].tx}`);
+onMove(ev(7, 1100, 1600));                // 変換後: x=600
+check('拡大中でもドラッグが追従する', Math.round(G.players[0].tx) === 600, `tx=${G.players[0].tx}`);
+pageRect = { left:0, top:0, width:800, height:1200 };
+updateRect();
 
 console.log(fail === 0 ? '\n=== 全テスト通過 ===' : `\n=== ${fail}件 失敗 ===`);
 process.exit(fail ? 1 : 0);
