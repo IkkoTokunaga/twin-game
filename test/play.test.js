@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -116,6 +116,63 @@ check('畑が中央帯に収まる',
     }
   }
   check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
+  makeField(G.stage);
+}
+
+// --- 硬さの違うブロックがステージごとに増える ---
+{
+  const kinds = [
+    { t: B_BRICK,   name: 'レンガ' },
+    { t: B_ROCK,    name: 'いわ' },
+    { t: B_DIAMOND, name: 'ダイヤ' },
+  ];
+  check('硬さの順序が ふつう < レンガ < いわ < ダイヤ',
+        BLOCK_HP[0] < BLOCK_HP[B_BRICK] && BLOCK_HP[B_BRICK] < BLOCK_HP[B_ROCK] &&
+        BLOCK_HP[B_ROCK] < BLOCK_HP[B_DIAMOND],
+        `${BLOCK_HP[0]} / ${BLOCK_HP[B_BRICK]} / ${BLOCK_HP[B_ROCK]} / ${BLOCK_HP[B_DIAMOND]}`);
+
+  const seenAt = (stage, type) => {              // そのステージで出るか（80畑ぶん見る）
+    let n = 0;
+    for (let i = 0; i < 80; i++) {
+      makeField(stage);
+      n += FIELD.grid.filter(b => b && b.type === type).length;
+    }
+    return n;
+  };
+
+  for (const k of kinds) {
+    const debut = BLOCK_DEBUT[k.t];
+    check(`${k.name}はステージ${debut - 1}までは出ない`, seenAt(debut - 1, k.t) === 0,
+          `見つかった数=${seenAt(debut - 1, k.t)}`);
+    check(`${k.name}はステージ${debut}から出る`, seenAt(debut, k.t) > 0);
+  }
+
+  // 深いステージほど硬いブロックの割合が増える
+  const hardRatio = (stage) => {
+    let hard = 0, all = 0;
+    for (let i = 0; i < 60; i++) {
+      makeField(stage);
+      for (const b of FIELD.grid) {
+        if (!b) continue;
+        all++;
+        if (b.type === B_BRICK || b.type === B_ROCK || b.type === B_DIAMOND) hard++;
+      }
+    }
+    return hard / all;
+  };
+  const r3 = hardRatio(3), r9 = hardRatio(9);
+  check('ステージが進むほど硬いブロックが増える', r9 > r3,
+        `ステージ3=${(r3*100).toFixed(1)}% ステージ9=${(r9*100).toFixed(1)}%`);
+
+  // 硬いブロックもちゃんと壊せる
+  makeField(9);
+  const b = { type: B_DIAMOND, hp: BLOCK_HP[B_DIAMOND], maxHp: BLOCK_HP[B_DIAMOND], star: false, flash: 0 };
+  FIELD.grid[idxAt(0, 0)] = b;
+  let hits = 0;
+  while (FIELD.grid[idxAt(0, 0)] && hits < 200) { damageBlock(0, 0, 8, 0); hits++; }
+  check('ダイヤも通常ショットで壊せる', FIELD.grid[idxAt(0, 0)] === null,
+        `${hits}発`);
+  console.log(`  参考: ダイヤは通常ショット${hits}発ぶん`);
   makeField(G.stage);
 }
 

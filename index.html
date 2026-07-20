@@ -383,7 +383,10 @@ function bgmStep(s, t, dur) {
 function stageSetup(n) {
   return {
     stars: Math.min(2 + Math.floor((n - 1) / 2), 5),   // 隠されたスターの数
-    hardRate: Math.min(0.05 + (n - 1) * 0.05, 0.30),   // かたいブロックの割合
+    // 硬いブロックはステージが進むと登場し、少しずつ増えていく
+    brickRate:   n >= BLOCK_DEBUT[B_BRICK]   ? Math.min(0.10 + (n - 2) * 0.03, 0.26) : 0,
+    rockRate:    n >= BLOCK_DEBUT[B_ROCK]    ? Math.min(0.06 + (n - 4) * 0.03, 0.18) : 0,
+    diamondRate: n >= BLOCK_DEBUT[B_DIAMOND] ? Math.min(0.04 + (n - 7) * 0.02, 0.10) : 0,
     bombRate: Math.min(0.03 + (n - 1) * 0.02, 0.12),   // ばくだんブロックの割合
     rows: 5,
     // ひとり用では相手の色のブロックが壊せず詰むので、色つきブロック自体を出さない
@@ -546,10 +549,24 @@ function aimFromFinger(p, cx, cy) {
    中央帯を格子状のブロックで埋め、いくつかのブロックの中に
    スターを隠す。プレイヤーは上下から掘り進めてスターを探す。
 ============================================================ */
-const B_NORMAL = 0, B_HARD = 1, B_BOMB = 2;
+// 掘るのに要る手数が増えていく4段階。ステージが進むと硬いものが出てくる
+const B_NORMAL = 0, B_BRICK = 1, B_ROCK = 2, B_DIAMOND = 3, B_BOMB = 4;
 // 色つきブロックは対応するプレイヤーしか壊せない（B_LOCK0=下の青 / B_LOCK1=上の赤）
-const B_LOCK0 = 3, B_LOCK1 = 4;
+const B_LOCK0 = 5, B_LOCK1 = 6;
 const lockOwner = (t) => t === B_LOCK0 ? 0 : (t === B_LOCK1 ? 1 : -1);
+
+const BLOCK_HP = {
+  [B_NORMAL]:  24,
+  [B_BRICK]:   60,
+  [B_ROCK]:   130,
+  [B_DIAMOND]:300,
+  [B_BOMB]:    24,
+  [B_LOCK0]:   24,
+  [B_LOCK1]:   24,
+};
+const BLOCK_NAME = { [B_BRICK]:'レンガ', [B_ROCK]:'いわ', [B_DIAMOND]:'ダイヤ' };
+// 硬いブロックが初めて出るステージ
+const BLOCK_DEBUT = { [B_BRICK]: 2, [B_ROCK]: 4, [B_DIAMOND]: 7 };
 const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[] };
 
 function idxAt(c, r) { return r * FIELD.cols + c; }
@@ -585,18 +602,22 @@ function makeField(stage) {
   FIELD.y0 = duoY1 - rows * cell;      // 青プレイヤー側の入口の高さは常に同じ
   FIELD.grid = new Array(cols * rows);
 
-  const tHard = S.hardRate;
-  const tBomb = tHard + S.bombRate;
-  const tL0   = tBomb + S.lockRate;
-  const tL1   = tL0 + S.lockRate;
+  const tDia   = S.diamondRate;
+  const tRock  = tDia + S.rockRate;
+  const tBrick = tRock + S.brickRate;
+  const tBomb  = tBrick + S.bombRate;
+  const tL0    = tBomb + S.lockRate;
+  const tL1    = tL0 + S.lockRate;
   for (let i = 0; i < FIELD.grid.length; i++) {
     const rnd = Math.random();
     let type = B_NORMAL;
-    if      (rnd < tHard) type = B_HARD;
-    else if (rnd < tBomb) type = B_BOMB;
-    else if (rnd < tL0)   type = B_LOCK0;
-    else if (rnd < tL1)   type = B_LOCK1;
-    const hp = type === B_HARD ? 70 : 24;
+    if      (rnd < tDia)   type = B_DIAMOND;
+    else if (rnd < tRock)  type = B_ROCK;
+    else if (rnd < tBrick) type = B_BRICK;
+    else if (rnd < tBomb)  type = B_BOMB;
+    else if (rnd < tL0)    type = B_LOCK0;
+    else if (rnd < tL1)    type = B_LOCK1;
+    const hp = BLOCK_HP[type];
     FIELD.grid[i] = { type, hp, maxHp: hp, star: false, flash: 0 };
   }
 
@@ -634,13 +655,13 @@ function ensureReachable() {
       const side = Math.random() < 0.5 ? 0 : 1;      // 0=下から / 1=上から
       const blocker = side === 0 ? B_LOCK1 : B_LOCK0;
 
-      if (b.type === blocker) { b.type = B_NORMAL; b.hp = b.maxHp = 24; }
+      if (b.type === blocker) { b.type = B_NORMAL; b.hp = b.maxHp = BLOCK_HP[B_NORMAL]; }
 
       const from = side === 0 ? r + 1 : 0;
       const to   = side === 0 ? FIELD.rows - 1 : r - 1;
       for (let rr = from; rr <= to; rr++) {
         const n = FIELD.grid[idxAt(c, rr)];
-        if (n && n.type === blocker) { n.type = B_NORMAL; n.hp = n.maxHp = 24; }
+        if (n && n.type === blocker) { n.type = B_NORMAL; n.hp = n.maxHp = BLOCK_HP[B_NORMAL]; }
       }
     }
   }
@@ -667,7 +688,7 @@ function breakBlock(c, r, ownerIdx, depth) {
     }
   } else {
     SFX.blockBreak();
-    burst(pos.x, pos.y, b.type === B_HARD ? '#c9d2e0' : '#7fb2ff', 12, 200, 5);
+    burst(pos.x, pos.y, BLOCK_COLORS[b.type].edge, 12, 200, 5);
   }
 
   // ときどき「かけら」が自陣側へ落ちる。拾うにはタテにも動く必要がある
@@ -1056,7 +1077,10 @@ function update(dt) {
       G.bullets.length = 0; G.chips.length = 0; G.bugs.length = 0;
       G.blasts.length = 0; G.flash = 0;
       makeField(G.stage);
-      G.banner = { text: 'ステージ ' + G.stage, life: 1.6 };
+      const debut = Object.keys(BLOCK_DEBUT).find(t => BLOCK_DEBUT[t] === G.stage);
+      G.banner = debut
+        ? { text: `あたらしいブロック: ${BLOCK_NAME[debut]}`, life: 2.2 }
+        : { text: 'ステージ ' + G.stage, life: 1.6 };
       SFX.stage();
     }
   }
@@ -1583,12 +1607,11 @@ function drawField() {
       const w = cell - pad * 2;
       const wear = b.hp / b.maxHp;             // 削れるほど暗く小さくなる
 
-      let base, edge;
-      if (b.type === B_HARD)       { base = '#8992a6'; edge = '#c3ccdb'; }
-      else if (b.type === B_BOMB)  { base = '#5a4a52'; edge = '#b9a6ae'; }
-      else if (b.type === B_LOCK0) { base = '#12688a'; edge = P_COLORS[0].main; }
-      else if (b.type === B_LOCK1) { base = '#8a2764'; edge = P_COLORS[1].main; }
-      else                         { base = '#2f5f9e'; edge = '#7fb2ff'; }
+      const pal = BLOCK_COLORS[b.type] || BLOCK_COLORS[B_NORMAL];
+      const base = b.type === B_LOCK0 ? '#12688a'
+                 : b.type === B_LOCK1 ? '#8a2764' : pal.base;
+      const edge = b.type === B_LOCK0 ? P_COLORS[0].main
+                 : b.type === B_LOCK1 ? P_COLORS[1].main : pal.edge;
 
       ctx.globalAlpha = 0.45 + 0.55 * wear;
       ctx.fillStyle = b.flash > 0 ? '#ffffff' : base;
@@ -1605,17 +1628,69 @@ function drawField() {
         drawBombIcon(x + cell / 2, y + cell / 2, cell);
       } else if (b.type === B_LOCK0 || b.type === B_LOCK1) {
         drawLockIcon(x + cell / 2, y + cell / 2, cell, lockOwner(b.type));
-      } else if (b.type === B_HARD) {          // かたいブロックは鋲を打つ
-        ctx.globalAlpha = 0.8;
-        ctx.fillStyle = edge;
-        for (const [ox, oy] of [[-1,-1],[1,-1],[-1,1],[1,1]]) {
-          ctx.beginPath();
-          ctx.arc(x + cell / 2 + ox * w * 0.32, y + cell / 2 + oy * w * 0.32, cell * 0.045, 0, TAU);
-          ctx.fill();
-        }
+      } else if (b.type === B_BRICK || b.type === B_ROCK || b.type === B_DIAMOND) {
+        drawHardPattern(b.type, x + pad, y + pad, w, edge);
       }
       ctx.globalAlpha = 1;
     }
+  }
+  ctx.restore();
+}
+
+const BLOCK_COLORS = {
+  [B_NORMAL]:  { base:'#2f5f9e', edge:'#7fb2ff' },
+  [B_BRICK]:   { base:'#8c4630', edge:'#e59162' },
+  [B_ROCK]:    { base:'#6b7078', edge:'#c0c7d2' },
+  [B_DIAMOND]: { base:'#1d7f9c', edge:'#9af0ff' },
+  [B_BOMB]:    { base:'#5a4a52', edge:'#b9a6ae' },
+  [B_LOCK0]:   { base:'#12688a', edge:'#31e6ff' },
+  [B_LOCK1]:   { base:'#8a2764', edge:'#ff5cc8' },
+};
+
+// 硬さが一目で分かるよう、種類ごとに違う模様を入れる
+function drawHardPattern(type, x, y, w, edge) {
+  ctx.save();
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = edge;
+  ctx.fillStyle = edge;
+  ctx.lineWidth = Math.max(1, w * 0.035);
+
+  if (type === B_BRICK) {                       // レンガ: 目地を互い違いに
+    for (let i = 1; i < 3; i++) {
+      const yy = y + (w * i) / 3;
+      ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + w, yy); ctx.stroke();
+    }
+    for (let i = 0; i < 3; i++) {
+      const yy = y + (w * i) / 3;
+      const xx = x + (i % 2 === 0 ? w / 2 : w / 4);
+      ctx.beginPath(); ctx.moveTo(xx, yy); ctx.lineTo(xx, yy + w / 3); ctx.stroke();
+      if (i % 2 === 0) {
+        ctx.beginPath(); ctx.moveTo(xx + w / 2, yy); ctx.lineTo(xx + w / 2, yy + w / 3); ctx.stroke();
+      }
+    }
+  } else if (type === B_ROCK) {                 // いわ: ごつごつした欠け
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.2, y + w * 0.3); ctx.lineTo(x + w * 0.45, y + w * 0.18);
+    ctx.lineTo(x + w * 0.6, y + w * 0.42); ctx.lineTo(x + w * 0.34, y + w * 0.55);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.55, y + w * 0.62); ctx.lineTo(x + w * 0.82, y + w * 0.55);
+    ctx.lineTo(x + w * 0.78, y + w * 0.84); ctx.lineTo(x + w * 0.52, y + w * 0.8);
+    ctx.closePath(); ctx.fill();
+  } else {                                      // ダイヤ: 面取りときらめき
+    const cx = x + w / 2, cy = y + w / 2, r = w * 0.30;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy);
+    ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+    ctx.closePath(); ctx.stroke();
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
+    ctx.stroke();
+    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(G.t * 4 + x);
+    ctx.beginPath(); ctx.arc(cx - r * 0.35, cy - r * 0.35, w * 0.05, 0, TAU); ctx.fill();
   }
   ctx.restore();
 }
