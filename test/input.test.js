@@ -46,11 +46,20 @@ check('開始タップがそのまま操作に使われる', G.players[0].pointe
       `pointer=${G.players[0].pointer} firing=${G.players[0].firing}`);
 
 // --- 症状1: 同じ側を2本目の指で触り、2本目を離す ---
-onDown(ev(2, 500, BOT));                 // 下側を2本目の指で触る
-check('2本目の指が操作を引き継ぐ', G.players[0].pointer === 2);
-onUp(ev(2, 500, BOT));                   // 2本目だけ離す（1本目はまだ触れている）
-check('2本目を離すと1本目に操作が戻る', G.players[0].pointer === 1 && G.players[0].firing === true,
+const heldX = G.players[0].tx;
+onDown(ev(2, 100, BOT));                 // 下側を2本目の指で触る（手のひら等を想定）
+check('2本目の指は操作を奪わない',
+      G.players[0].pointer === 1 && Math.abs(G.players[0].tx - heldX) < 1,
+      `pointer=${G.players[0].pointer} tx=${G.players[0].tx}`);
+onUp(ev(2, 100, BOT));                   // 2本目だけ離す（1本目はまだ触れている）
+check('2本目を離しても1本目で操作が続く', G.players[0].pointer === 1 && G.players[0].firing === true,
       `pointer=${G.players[0].pointer} firing=${G.players[0].firing}`);
+onDown(ev(3, 150, BOT));                 // 控えの指を置く
+onUp(ev(1, 400, BOT));                   // 操作中の指を離す
+check('操作中の指を離すと控えの指へ引き継ぐ', G.players[0].pointer === 3 && G.players[0].firing === true,
+      `pointer=${G.players[0].pointer}`);
+onUp(ev(3, 150, BOT));
+onDown(ev(1, 400, BOT));                 // 以降のテストのため元に戻す
 const before = G.players[0].x;
 onMove(ev(1, 120, BOT));
 check('1本目のドラッグで機体が動く', G.players[0].tx !== before, `tx=${G.players[0].tx}`);
@@ -142,6 +151,30 @@ check('画面外へドラッグしても陣地内に収まる',
       G.players[0].ty >= Z.bot.y0 - 0.01 && G.players[0].ty <= Z.bot.y1 + 0.01,
       `tx=${G.players[0].tx} ty=${G.players[0].ty}`);
 onUp(ev(600, 0, 0));
+
+// --- 画面外・不正座標のタップ ---
+pointers.clear();
+for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; }
+onDown(ev(20, 400, 1000));                        // 正常に操作中
+const keepX = G.players[0].tx, keepY = G.players[0].ty;
+
+onDown(ev(21, -50, 1000));                        // 画面左外をタップ
+check('画面外タップは無視される（左）', G.players[0].pointer === 20 && !pointers.has(21));
+onDown(ev(22, 400, 1400));                        // 画面下外をタップ
+check('画面外タップは無視される（下）', G.players[0].pointer === 20 && !pointers.has(22));
+onDown(ev(23, NaN, NaN));                         // 不正値
+check('不正座標のタップは無視される', G.players[0].pointer === 20 && !pointers.has(23));
+check('操作中の機体は影響を受けない',
+      G.players[0].tx === keepX && G.players[0].ty === keepY,
+      `tx=${G.players[0].tx} ty=${G.players[0].ty}`);
+
+onMove(ev(20, NaN, NaN));                         // 移動側に不正値が来た場合
+check('不正座標の移動で機体が壊れない',
+      isFinite(G.players[0].tx) && isFinite(G.players[0].ty), `tx=${G.players[0].tx}`);
+update(0.016);
+check('不正座標のあとも描画位置が有限', isFinite(G.players[0].x) && isFinite(G.players[0].y),
+      `x=${G.players[0].x} y=${G.players[0].y}`);
+onUp(ev(20, 400, 1000));
 
 console.log(fail === 0 ? '\n=== 全テスト通過 ===' : `\n=== ${fail}件 失敗 ===`);
 process.exit(fail ? 1 : 0);

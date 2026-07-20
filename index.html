@@ -412,6 +412,7 @@ function clampPlayer(p) {
 // させることで、画面端に触れなくても隅々まで届き、かつ機体は常に指より
 // 敵側（＝指に隠れない位置）に来る。
 function aimFromFinger(p, cx, cy) {
+  if (!isFinite(cx) || !isFinite(cy)) return;   // NaN が入ると機体が消える
   p.fx = cx; p.fy = cy;
   const z = p.bottom ? Z.bot : Z.top;
 
@@ -471,6 +472,11 @@ function onDown(e) {
 
   // 各種ボタンは最優先で判定（機体の移動・射撃には渡さない）
   const ex = localX(e), ey = localY(e);
+  // 画面外・盤面外・不正値のタップは受け付けない。
+  // 操作中の指を横取りして機体が飛ぶのを防ぐ。
+  if (!isFinite(ex) || !isFinite(ey)) return;
+  const pad = 4;
+  if (ex < -pad || ey < -pad || ex > W + pad || ey > H + pad) return;
   const onBtn = (b) => {
     const dx = ex - b.x, dy = ey - b.y, hit = b.r + 10;
     return dx * dx + dy * dy < hit * hit;
@@ -506,6 +512,11 @@ function onDown(e) {
 
   pointers.set(e.pointerId, { idx, x: ex, y: ey });
   p.stack.push(e.pointerId);        // 同じ側を複数の指で触っても取りこぼさない
+
+  // 先に触れている指があるなら主導権は渡さない。手のひらや3本目の指が
+  // 触れただけで機体が飛ぶのを防ぐ（その指は控えとしてスタックに残る）。
+  if (p.pointer !== -1 && pointers.has(p.pointer)) return;
+
   p.pointer = e.pointerId;
   p.firing = true;
   aimFromFinger(p, ex, ey);
@@ -535,7 +546,7 @@ function onUp(e) {
 function releasePointer(p, id) {
   const i = p.stack.indexOf(id);
   if (i !== -1) p.stack.splice(i, 1);
-  const next = p.stack.length ? p.stack[p.stack.length - 1] : -1;
+  const next = p.stack.length ? p.stack[0] : -1;   // 先に触れていた指へ戻す
   p.pointer = next;
   if (next === -1) {
     p.firing = false;
@@ -658,7 +669,7 @@ function update(dt) {
     for (let i = p.stack.length - 1; i >= 0; i--) {
       if (!pointers.has(p.stack[i])) p.stack.splice(i, 1);
     }
-    const act = p.stack.length ? p.stack[p.stack.length - 1] : -1;
+    const act = p.stack.length ? p.stack[0] : -1;
     if (act !== p.pointer) {
       p.pointer = act;
       p.firing = act !== -1 && !p.down;
