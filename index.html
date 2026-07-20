@@ -283,6 +283,20 @@ const SFX = {
       tone({ f, type:'square', dur:0.34, vol:0.17, delay:i * 0.13 }));
     noiseBurst({ f:6000, f2:1000, dur:0.5, vol:0.10, filter:'highpass', delay:0.5 });
   },
+  milestone() {                                  // 10ステージごとの大きなファンファーレ
+    const mel = [523, 659, 784, 1047, 784, 1047, 1319];
+    mel.forEach((f, i) => {
+      tone({ f, type:'square',   dur:0.34, vol:0.18, delay:i * 0.16 });
+      tone({ f: f / 2, type:'triangle', dur:0.34, vol:0.10, delay:i * 0.16 });
+    });
+    tone({ f:1568, type:'triangle', dur:1.1, vol:0.2, delay:mel.length * 0.16 });
+  },
+  firework() {
+    throttled('fw', 90, () => {
+      noiseBurst({ f:5200, f2:600, dur:0.42, vol:0.2, filter:'highpass' });
+      tone({ f:900, f2:280, type:'triangle', dur:0.2, vol:0.09 });
+    });
+  },
   stage() {
     [392, 523, 659].forEach((f, i) =>
       tone({ f, type:'triangle', dur:0.28, vol:0.16, delay:i * 0.09 }));
@@ -400,6 +414,7 @@ const G = {
   bugs: [],               // おじゃまむし（当たると一時停止）
   bugT: 0,                // 次のおじゃまむしまでの秒数
   blasts: [],             // 爆発の衝撃波
+  celebrate: null,        // 10ステージごとのお祝い演出
   flash: 0,               // 画面全体の閃光
   parts: [],
   starsFound: 0,
@@ -694,6 +709,7 @@ function resetGame(solo) {
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
   G.blasts.length = 0; G.flash = 0;
+  G.celebrate = null;
   // ひとり用は青（下側）のみ。上側は生成しないので、そちらを触っても何も起きない
   G.players = G.solo ? [makePlayer(0)] : [makePlayer(0), makePlayer(1)];
   makeField(1);
@@ -1039,6 +1055,23 @@ function update(dt) {
     }
   }
 
+  /* --- 節目のお祝い --- */
+  if (G.celebrate) {
+    const cb = G.celebrate;
+    cb.t += dt;
+    cb.fw -= dt;
+    if (cb.fw <= 0 && cb.t < cb.dur - 0.6) {
+      cb.fw = 0.22;
+      const hue = Math.floor(rand(0, 360));
+      const fx = rand(W * 0.15, W * 0.85);
+      const fy = rand(Z.top.y0, Z.bot.y1);
+      burst(fx, fy, `hsl(${hue},95%,65%)`, 26, 420, 6);
+      burst(fx, fy, '#ffffff', 10, 300, 4);
+      SFX.firework();
+    }
+    if (cb.t >= cb.dur) G.celebrate = null;
+  }
+
   /* --- 爆発の衝撃波と閃光 --- */
   G.flash = Math.max(0, G.flash - dt * 3.4);
   for (let i = G.blasts.length - 1; i >= 0; i--) {
@@ -1108,9 +1141,18 @@ function collectGem(g, ownerIdx) {
 
   if (G.starsFound >= G.starsTotal) {
     G.score += 500 * G.stage;
-    G.banner = { text: 'ステージ クリア！', life: 2.0 };
-    SFX.clear();
-    G.nextT = 2.2;
+    // 10ステージごとは節目として、長めのお祝いを挟む
+    const milestone = G.stage % 10 === 0;
+    if (milestone) {
+      G.score += 5000;
+      G.celebrate = { t: 0, dur: 5.0, stage: G.stage, fw: 0 };
+      SFX.milestone();
+      G.nextT = 5.0;
+    } else {
+      G.banner = { text: 'ステージ クリア！', life: 2.0 };
+      SFX.clear();
+      G.nextT = 2.2;
+    }
   }
 }
 
@@ -1166,6 +1208,7 @@ function draw() {
     ctx.restore();
   }
 
+  if (G.celebrate) drawCelebrate();
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'pause') drawPauseOverlay();
   if (G.banner) drawBanner(G.banner);
@@ -1732,6 +1775,58 @@ function drawTitle() {
 }
 
 // 人数選択ボタン。文字は上下2方向に出して、どちら側からでも選べるようにする
+function drawCelebrate() {
+  const cb = G.celebrate;
+  if (!cb) return;
+  const q = clamp(cb.t / cb.dur, 0, 1);
+  const fade = q < 0.08 ? q / 0.08 : (q > 0.92 ? (1 - q) / 0.08 : 1);   // 出入りだけ滑らかに
+
+  ctx.save();
+  ctx.globalAlpha = fade * 0.62;
+  ctx.fillStyle = 'rgba(6,4,20,1)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  for (const flip of [0, 1]) {
+    ctx.save();
+    ctx.translate(W / 2, flip ? Z.cy - H * 0.13 : Z.cy + H * 0.13);
+    if (flip) ctx.rotate(Math.PI);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = fade;
+
+    // 虹色に流れる見出し
+    const hue = (G.t * 90) % 360;
+    ctx.fillStyle = `hsl(${hue},95%,70%)`;
+    ctx.shadowColor = `hsl(${hue},95%,60%)`; ctx.shadowBlur = 28;
+    ctx.font = '900 44px system-ui, sans-serif';
+    const pop = 1 + 0.06 * Math.sin(G.t * 6);
+    ctx.save(); ctx.scale(pop, pop);
+    ctx.fillText(`ステージ ${cb.stage} クリア！`, 0, -34 / pop);
+    ctx.restore();
+    ctx.shadowBlur = 0;
+
+    // ★を並べて達成感を出す
+    const marks = Math.min(10, cb.stage / 10);
+    for (let i = 0; i < marks; i++) {
+      ctx.save();
+      ctx.translate((i - (marks - 1) / 2) * 34, 8);
+      ctx.rotate(Math.sin(G.t * 3 + i) * 0.3);
+      ctx.fillStyle = '#ffd54a';
+      ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 14;
+      star5(ctx, 13);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '800 22px system-ui, sans-serif';
+    ctx.globalAlpha = fade * (0.6 + 0.4 * Math.sin(G.t * 5));
+    ctx.fillText(`つぎは ステージ ${cb.stage + 1}`, 0, 48);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawMenuButton(r, label, col, people) {
   const pulse = 0.5 + 0.5 * Math.sin(G.t * 3);
   ctx.save();

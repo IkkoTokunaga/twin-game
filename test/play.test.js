@@ -16,8 +16,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 let fail=0;
 const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e)); if(!c)fail++;};
@@ -92,6 +92,44 @@ check('畑が中央帯に収まる',
   }
   check('どの★にも到達経路がある（300畑ぶん）', bad === 0, `到達不能=${bad} / 検査した★=${checked}`);
   makeField(G.stage);
+}
+
+// --- 10ステージごとのお祝い演出 ---
+{
+  const clearStage = (n) => {                    // ステージnをクリアした状態を作る
+    resetGame(false);
+    G.stage = n; G.starsTotal = 1; G.starsFound = 0;
+    G.celebrate = null; G.parts.length = 0;
+    const gem = { x: 400, y: Z.cy, r: 20, t: 0, taken: false, life: 1, owner: 0 };
+    G.gems.push(gem);
+    collectGem(gem, 0);
+  };
+
+  clearStage(9);
+  check('9ステージ目は通常のクリア', G.celebrate === null && Math.abs(G.nextT - 2.2) < 0.01,
+        `celebrate=${!!G.celebrate} nextT=${G.nextT}`);
+
+  clearStage(10);
+  check('10ステージ目でお祝い演出が出る', !!G.celebrate && G.celebrate.stage === 10,
+        `celebrate=${JSON.stringify(G.celebrate)}`);
+  check('お祝いは通常より長い', G.nextT > 4, `nextT=${G.nextT}`);
+
+  const partsBefore = G.parts.length;
+  for (let i = 0; i < 60; i++) update(1/60);     // 1秒ぶん
+  check('お祝い中は花火が上がり続ける', G.parts.length > partsBefore,
+        `粒子 ${partsBefore} -> ${G.parts.length}`);
+
+  for (let i = 0; i < 60 * 6; i++) update(1/60); // 演出が終わるまで
+  check('お祝いは自動で終わる', G.celebrate === null);
+  check('お祝いのあと次のステージへ進む', G.stage === 11, `stage=${G.stage}`);
+
+  clearStage(20);
+  check('20ステージ目でもお祝いが出る', !!G.celebrate && G.celebrate.stage === 20);
+  clearStage(15);
+  check('15ステージ目はお祝いなし', G.celebrate === null);
+
+  resetGame(false);
+  onDown(ev(1,400,1000)); onDown(ev(2,400,200));
 }
 
 // --- ひとり用モード ---
