@@ -1764,9 +1764,66 @@ function drawField() {
         drawLockIcon(x + cell / 2, y + cell / 2, cell, lockOwner(b.type));
       } else if (b.type === B_BRICK || b.type === B_ROCK || b.type === B_DIAMOND) {
         drawHardPattern(b.type, x + pad, y + pad, w, edge);
+        // 削れるほど亀裂が広がり、割れる直前がひと目で分かる
+        if (wear < 1) {
+          if (!b.cracks) b.cracks = makeCracks(b.mega ? 9 : 4);
+          drawCracks(x + pad, y + pad, w, b.cracks, 1 - wear);
+        }
       }
       ctx.globalAlpha = 1;
     }
+  }
+  ctx.restore();
+}
+
+// ブロックごとに一度だけ亀裂の形を作る（0..1 の相対座標で持つ）。
+// 中ほどから外へ、少し折れながら伸びる線を count 本ぶん用意する。
+function makeCracks(count) {
+  const cracks = [];
+  for (let i = 0; i < count; i++) {
+    let x = 0.28 + Math.random() * 0.44;       // 内側のどこかから始める
+    let y = 0.28 + Math.random() * 0.44;
+    let ang = Math.random() * TAU;
+    const segs = 2 + Math.floor(Math.random() * 3);
+    const pts = [{ x, y }];
+    for (let k = 0; k < segs; k++) {
+      ang += (Math.random() - 0.5) * 1.2;      // ジグザグに曲がる
+      const len = 0.12 + Math.random() * 0.16;
+      x = clamp(x + Math.cos(ang) * len, 0.06, 0.94);
+      y = clamp(y + Math.sin(ang) * len, 0.06, 0.94);
+      pts.push({ x, y });
+    }
+    cracks.push(pts);
+  }
+  return cracks;
+}
+
+// ダメージ（0..1）に応じて亀裂を順に見せ、割れる直前ほど深く伸ばす
+function drawCracks(px, py, w, cracks, damage) {
+  const n = cracks.length;
+  const shown = Math.min(n, Math.ceil(n * damage));
+  if (shown <= 0) return;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < shown; i++) {
+    const pts = cracks[i];
+    // この亀裂が伸びきるまでの成長ぐあい（0..1）
+    const grow = clamp((damage - i / n) * n, 0, 1);
+    const upto = Math.max(2, Math.ceil((pts.length - 1) * grow) + 1);
+    // 暗い溝
+    ctx.globalAlpha = 0.3 + 0.55 * damage;
+    ctx.strokeStyle = 'rgba(8,10,16,0.9)';
+    ctx.lineWidth = Math.max(1, w * (0.02 + 0.02 * damage));
+    ctx.beginPath();
+    ctx.moveTo(px + pts[0].x * w, py + pts[0].y * w);
+    for (let k = 1; k < upto; k++) ctx.lineTo(px + pts[k].x * w, py + pts[k].y * w);
+    ctx.stroke();
+    // 割れ目のふちに入るわずかな光
+    ctx.globalAlpha = 0.18 * damage;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = Math.max(0.6, w * 0.008);
+    ctx.stroke();
   }
   ctx.restore();
 }
