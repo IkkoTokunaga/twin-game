@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -663,6 +663,24 @@ check('畑が中央帯に収まる',
   // 以降のテストのため状態を戻す
   resetGame(false); G.mode = 'play';
   onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
+}
+
+// --- ひとり用: かけらの湧き場所 ---
+{
+  resetGame(true); G.mode = 'play';
+  // おじゃまむしを倒した場所（座標つき）なら、その場から出る
+  G.chips.length = 0;
+  dropPowerChip(0, 300, 500);
+  check('ひとり用: 倒した場所のかけらはその場から出る',
+        G.chips.length === 1 && Math.abs(G.chips[0].x - 300) < 1 && Math.abs(G.chips[0].y - 500) < 1,
+        `x=${G.chips[0] && G.chips[0].x} y=${G.chips[0] && G.chips[0].y}`);
+  // かけらを一定数あつめた時（座標なし）は画面上部から降ってくる
+  G.chips.length = 0;
+  dropPowerChip(0);
+  check('ひとり用: あつめた時のかけらは画面上部から出る',
+        G.chips.length === 1 && G.chips[0].y < 0,
+        `y=${G.chips[0] && G.chips[0].y}`);
+  resetGame(false); G.mode = 'play';
 }
 
 // --- 通常攻撃は扇状 ---

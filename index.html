@@ -1617,18 +1617,20 @@ function nextPowerKind(p) {
   return room[first] ? first : (first === 'beam' ? 'shot' : 'beam');
 }
 
-// x, y を渡すとその場から落ちる（省略すると畑の縁から）
+// x, y を渡すとその場から落ちる（省略すると畑の縁から）。
+// ひとり用でも、倒したおじゃまむしの位置など座標が指定されていればそこから出す。
+// 座標なし（かけらを一定数あつめた時）だけ、畑と同じく画面上部から降らせる。
 function dropPowerChip(idx, x, y) {
   if (!FIELD.cell) return false;
   const p = G.players[idx];
   if (!p) return false;
   // 両方とも最大まで強化済みなら、代わりに巨大レーザーの球を落とす
   const kind = nextPowerKind(p) || 'laser';
-  // ひとり用は畑と同じく画面上部から降ってくる。ふたり用は落とした場所/自陣の縁から
+  const fromTop = G.solo && x === undefined;
   const side = G.solo ? 0 : (idx === 1 ? 1 : 0);
   G.chips.push({
-    x: G.solo ? soloChipX() : (x !== undefined ? x : rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30)),
-    y: G.solo ? SOLO_CHIP_Y : (y !== undefined ? y : (side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0)),
+    x: fromTop ? soloChipX() : (x !== undefined ? x : rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30)),
+    y: fromTop ? SOLO_CHIP_Y : (y !== undefined ? y : (side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0)),
     vx: rand(-25, 25),
     vy: (side === 0 ? 1 : -1) * 60,
     side, t: 0, power: true, kind,
