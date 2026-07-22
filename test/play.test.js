@@ -757,6 +757,7 @@ check('畑が中央帯に収まる',
 
   G.chips.length = 0; G.bullets.length = 0;
   G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: true, kind: 'clone' });
+  draw();                                        // 機体の形の絵柄が描けること
   update(1/60);
   check('分身のかけらを受け止めると分身が出る', G.clones.length === 1,
         `分身=${G.clones.length}`);
