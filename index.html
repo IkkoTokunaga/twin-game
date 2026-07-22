@@ -451,7 +451,8 @@ const G = {
   t: 0,
   stage: 1,
   survT: 0,               // ひとり用の生存時間（秒）
-  crush: 0,               // 自陣ラインを越えて積もっている行数（警告表示用）
+  crush: 0,               // 自陣ラインを越えて積もっている行数（負け判定用）
+  approach: 0,            // 一番下のブロックとラインの符号つき距離（px・警告用）
   overInfo: null,         // ゲームオーバー時の記録 {t, score}
   solo: false,            // ひとり用（青のプレイヤーだけ）
   score: 0,
@@ -594,6 +595,8 @@ const MEGA_HP = { [B_BRICK]: 520, [B_ROCK]: 1150, [B_DIAMOND]: 2400 };
 // ひとり用（エンドレス生存）: 畑がじわじわ迫り、自陣ラインを LOSE_ROWS 行ぶん
 // 越えられたらゲームオーバー。掘り返して押し戻せば持ちこたえられる。
 const LOSE_ROWS = 3;
+// 赤い警告はラインを越える前から出す。あと WARN_LEAD 行に迫った時点で光り始める。
+const WARN_LEAD = 4;
 const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[], scrollY:0, dangerY:0 };
 
 function idxAt(c, r) { return r * FIELD.cols + c; }
@@ -791,10 +794,11 @@ function commitSurvivalRow() {
   if (Math.random() < megaChance) tryPlaceMega(0, 1, 1);
 }
 
-// 自陣ラインを一番深く越えているブロックの、越えた量（px）を返す
+// 自陣ラインに一番近づいているブロックの、ラインとの距離（px）を返す。
+// 越えていれば正、まだ手前なら負。警告はこの符号つきの値から出す。
 function survivalIntrusion() {
   const cell = FIELD.cell, cols = FIELD.cols, rows = FIELD.rows;
-  let deepest = 0;
+  let deepest = -Infinity;
   for (let c = 0; c < cols; c++) {
     for (let r = rows - 1; r >= 0; r--) {          // 各列の一番下のブロックだけ見る
       if (FIELD.grid[idxAt(c, r)]) {
@@ -804,7 +808,7 @@ function survivalIntrusion() {
       }
     }
   }
-  return deepest;
+  return deepest === -Infinity ? -LOSE_ROWS * cell : deepest;
 }
 
 function triggerGameOver() {
@@ -1018,7 +1022,7 @@ function damageBlock(c, r, dmg, ownerIdx, noBomb) {
 function resetGame(solo) {
   G.solo = !!solo;
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
-  G.survT = 0; G.crush = 0; G.overInfo = null;
+  G.survT = 0; G.crush = 0; G.approach = 0; G.overInfo = null;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
   G.blasts.length = 0; G.flash = 0;
@@ -1374,9 +1378,10 @@ function update(dt) {
   if (G.solo) {
     G.survT += dt;
     scrollSurvival(dt);
-    const over = survivalIntrusion();
-    G.crush = over / FIELD.cell;
-    if (over >= LOSE_ROWS * FIELD.cell) { triggerGameOver(); return; }
+    const deep = survivalIntrusion();          // ライン基準の符号つき距離（越え=正）
+    G.approach = deep;                          // 警告用（手前でも負の値で持つ）
+    G.crush = Math.max(0, deep) / FIELD.cell;   // 負けはライン越えぶんだけ
+    if (deep >= LOSE_ROWS * FIELD.cell) { triggerGameOver(); return; }
   }
 
   /* --- ステージ進行 --- */
@@ -2022,7 +2027,10 @@ function drawField() {
 function drawDangerLine() {
   const dy = FIELD.dangerY;
   if (!dy) return;
-  const warn = clamp(G.crush / LOSE_ROWS, 0, 1);     // 0=安全 .. 1=あと少しで負け
+  // ラインを越える前から光り始める。あと WARN_LEAD 行に迫ったら 0 から立ち上がり、
+  // LOSE_ROWS 行ぶん越えた（＝負け）ところで 1 になる。
+  const lead = WARN_LEAD * FIELD.cell;
+  const warn = clamp((G.approach + lead) / (lead + LOSE_ROWS * FIELD.cell), 0, 1);
   const pulse = 0.6 + 0.4 * Math.sin(G.t * 8);
   ctx.save();
   // 越えられているぶんだけ危険帯を赤く塗る
