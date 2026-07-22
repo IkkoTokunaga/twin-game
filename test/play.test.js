@@ -46,6 +46,9 @@ const check=(n,c,e='')=>{console.log((c?'  PASS  ':'  FAIL  ')+n+(c?'':'   '+e))
 onDown(ev(1, MENU.duo.x + MENU.duo.w/2, MENU.duo.y + MENU.duo.h/2));   // ふたりで開始
 check('ブロック畑が生成される', FIELD.grid.length > 0 && FIELD.cols > 3 && FIELD.rows >= 5,
       `cols=${FIELD.cols} rows=${FIELD.rows} cell=${Math.round(FIELD.cell)}`);
+check('よこは12ブロック固定', FIELD.cols === 12, `cols=${FIELD.cols}`);
+check('12列が画面幅に収まる', FIELD.x0 >= 0 && FIELD.x0 + FIELD.cols*FIELD.cell <= 800 + 0.5,
+      `x0=${FIELD.x0.toFixed(0)} 右端=${(FIELD.x0+FIELD.cols*FIELD.cell).toFixed(0)}`);
 check('砲口が畑にめり込まない',
       FIELD.y0 + FIELD.rows*FIELD.cell <= Z.bot.y0 - 20*1.8 &&
       FIELD.y0 >= Z.top.y1 + 20*1.8,

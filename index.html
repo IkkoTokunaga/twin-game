@@ -620,6 +620,16 @@ function rollBlock(S) {
   return { type, hp, maxHp: hp, star: false, flash: 0 };
 }
 
+// 横は常に FIELD_COLS 列に固定する。幅が足りない端末（スマホ）ではセルを
+// 縮めて 12 列を収め、広い画面では普通サイズのまま中央に寄せる。
+const FIELD_COLS = 12;
+function fieldMetrics() {
+  const inset = 20 * SHIP.scale;
+  const usableW = W - inset * 2;
+  const cell = Math.min(Math.max(28, CELL), usableW / FIELD_COLS);
+  return { cell, cols: FIELD_COLS, x0: (W - FIELD_COLS * cell) / 2 };
+}
+
 function makeField(stage) {
   FIELD.scrollY = 0;
   FIELD.dangerY = 0;
@@ -631,19 +641,15 @@ function makeField(stage) {
   const pad = 20 * SHIP.scale + 4;
   const duoY0 = Z.top.y1 + pad;
   const duoY1 = Z.bot.y0 - pad;
-  const cell = Math.max(28, CELL);
+  const { cell, cols, x0 } = fieldMetrics();
 
   const topY = duoY0;
   const rows = Math.max(1, Math.floor((duoY1 - topY) / cell));
 
-  // 畑は機体が届く範囲だけに敷く。はみ出すと端の列が永久に掘れなくなる
-  const inset = 20 * SHIP.scale;
-  const cols = Math.max(4, Math.floor((W - inset * 2) / cell));
-
   FIELD.cell = cell;
   FIELD.rows = rows;
   FIELD.cols = cols;
-  FIELD.x0 = (W - cols * cell) / 2;
+  FIELD.x0 = x0;
   FIELD.y0 = duoY1 - rows * cell;      // 青プレイヤー側の入口の高さは常に同じ
   FIELD.grid = new Array(cols * rows);
 
@@ -717,13 +723,11 @@ function soloChipX() { return rand(FIELD.x0 + 24, FIELD.x0 + FIELD.cols * FIELD.
 const SOLO_CHIP_Y = -12;
 
 function makeSurvivalField() {
-  const cell = Math.max(28, CELL);
-  const inset = 20 * SHIP.scale;
-  const cols = Math.max(4, Math.floor((W - inset * 2) / cell));
+  const { cell, cols, x0 } = fieldMetrics();
 
   FIELD.cell = cell;
   FIELD.cols = cols;
-  FIELD.x0 = (W - cols * cell) / 2;
+  FIELD.x0 = x0;
   FIELD.y0 = -cell;                       // 一番上の行は画面の外から入ってくる
   FIELD.scrollY = 0;
   FIELD.dangerY = Z.bot.y0;               // ここを越えて積もると危険
