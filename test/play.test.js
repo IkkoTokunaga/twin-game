@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -533,57 +533,124 @@ check('畑が中央帯に収まる',
   onDown(ev(1,400,1000)); onDown(ev(2,400,200));
 }
 
-// --- ひとり用モード ---
+// --- ひとり用モード（迫りくる畑・エンドレス生存） ---
 {
-  resetGame(true);
+  resetGame(true); G.mode = 'play';
   check('ひとり用は青のプレイヤーだけ', G.players.length === 1 && G.players[0].bottom === true,
         `機数=${G.players.length}`);
 
-  // 畑がふたり用より広いこと（2人目の陣地まで使う）
-  makeField(1);
-  const soloRows = FIELD.rows, soloCount = FIELD.grid.filter(Boolean).length, soloStars = G.starsTotal;
-  const soloTop = FIELD.y0;
-  check('ひとり用の畑は2人目の陣地まで広がる', soloTop <= Z.top.y1 + 1,
-        `畑の上端=${soloTop.toFixed(0)} 上陣地の下端=${Z.top.y1.toFixed(0)}`);
-  check('ひとり用は青の陣地に食い込まない',
-        FIELD.y0 + FIELD.rows * FIELD.cell <= Z.bot.y0 + 1,
-        `畑の下端=${(FIELD.y0 + FIELD.rows * FIELD.cell).toFixed(0)} 下陣地=${Z.bot.y0.toFixed(0)}`);
+  // 畑は画面上端の外から始まり、自陣ラインの奥まで届く
+  check('畑は画面上端の外から入ってくる', FIELD.y0 < 0, `y0=${FIELD.y0.toFixed(0)}`);
+  check('自陣ラインが設定されている', FIELD.dangerY > 0 && Math.abs(FIELD.dangerY - Z.bot.y0) < 1,
+        `dangerY=${FIELD.dangerY.toFixed(0)} 下陣地=${Z.bot.y0.toFixed(0)}`);
+  check('序盤は機体との間に余白がある（開始時は危険ゼロ）', G.crush === 0, `crush=${G.crush}`);
+
+  // 色つきブロックは出ない
   let locks = 0;
-  for (let i = 0; i < 60; i++) {
-    makeField(1 + (i % 8));
+  for (let i = 0; i < 40; i++) {
+    resetGame(true);
     locks += FIELD.grid.filter(b => b && (b.type === B_LOCK0 || b.type === B_LOCK1)).length;
   }
-  check('ひとり用では色つきブロックが出ない（60畑ぶん）', locks === 0, `色つき=${locks}`);
+  check('ひとり用では色つきブロックが出ない', locks === 0, `色つき=${locks}`);
 
   // 上側を触っても何も起きない
+  resetGame(true); G.mode = 'play';
   const before = G.players[0].tx;
   onDown(ev(80, 400, 200));
   check('ひとり用では上側を触っても無反応',
         G.players.length === 1 && G.players[0].tx === before, `tx=${G.players[0].tx}`);
   onUp(ev(80, 400, 200));
 
-  // 実際に掘ってクリアできるか
-  onDown(ev(81, 400, 1000));
-  let cleared = false, soloFrames = 0;
-  for (let i = 0; i < 60 * 240; i++) {
-    soloFrames = i;
-    onMove(ev(81, aimFinger(true, i), 900 + (i % 200)));
-    update(1/60); draw();
-    if (G.stage >= 2) { cleared = true; break; }
-  }
-  check('ひとりでもステージをクリアできる', cleared,
-        `stage=${G.stage} 掘=${G.players[0].dug} 経過=${(soloFrames/60).toFixed(1)}秒`);
-  console.log(`  参考: ひとり用のクリア時間 ${(soloFrames/60).toFixed(1)}秒`);
-  onUp(ev(81, 400, 1000));
+  // 畑が下へせり出し、生存時間が伸びる
+  resetGame(true); G.mode = 'play';
+  const y0start = FIELD.y0 + FIELD.scrollY;
+  for (let i = 0; i < 60 * 3; i++) update(1/60);   // 3秒ぶん進める（撃たずに放置）
+  check('生存時間が進む', G.survT >= 2.9, `survT=${G.survT.toFixed(1)}`);
+  check('畑が下へせり出す', FIELD.y0 + FIELD.scrollY > y0start, `Δ=${(FIELD.y0 + FIELD.scrollY - y0start).toFixed(1)}px`);
 
-  // ふたり用に戻す
-  resetGame(false);
+  // 撃たずに放置すればいずれゲームオーバーになる
+  let over = false, overFrames = 0;
+  for (let i = 0; i < 60 * 120; i++) {
+    overFrames = i;
+    update(1/60);
+    if (G.mode === 'over') { over = true; break; }
+  }
+  check('放置しつづけると畑に潰されてゲームオーバー', over,
+        `mode=${G.mode} survT=${G.survT.toFixed(1)}`);
+  check('ゲームオーバーに生存記録が残る', G.overInfo && G.overInfo.t > 0,
+        `overInfo=${JSON.stringify(G.overInfo)}`);
+  console.log(`  参考: 撃たずに耐えられた時間 ${(overFrames/60).toFixed(1)}秒`);
+
+  // タップでタイトルへ戻れる
+  onDown(ev(82, 400, 1000));
+  check('ゲームオーバー後タップでタイトルへ', G.mode === 'title', `mode=${G.mode}`);
+  onUp(ev(82, 400, 1000));
+
+  // 掘れば危険を押し戻せる（撃ち続けると生き延びる）
+  resetGame(true); G.mode = 'play';
+  onDown(ev(83, 400, 1000));
+  let survived = true;
+  for (let i = 0; i < 60 * 30; i++) {
+    onMove(ev(83, aimFinger(true, i), 900 + (i % 120)));
+    update(1/60); draw();
+    if (G.mode === 'over') { survived = false; break; }
+  }
+  check('撃ち続ければ30秒は生き延びられる', survived,
+        `mode=${G.mode} 掘=${G.players[0].dug} survT=${G.survT.toFixed(1)}`);
+  onUp(ev(83, 400, 1000));
+
+  // ふたり用に戻す（以降のテストのため mode も play に戻す）
+  resetGame(false); G.mode = 'play';
   makeField(1);
-  check('ふたり用に戻すと2機になる', G.players.length === 2);
-  check('ひとり用の畑はふたり用より広い',
-        soloRows > FIELD.rows && soloCount > FIELD.grid.filter(Boolean).length,
-        `ひとり=${soloRows}段/${soloCount}個 ふたり=${FIELD.rows}段/${FIELD.grid.filter(Boolean).length}個`);
-  check('ひとり用はスターも多い', soloStars > G.starsTotal, `ひとり★${soloStars} ふたり★${G.starsTotal}`);
+  check('ふたり用に戻すと2機になる', G.players.length === 2 && !G.solo);
+  check('ふたり用の畑はスクロールしない', FIELD.scrollY === 0 && FIELD.dangerY === 0);
+  onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
+}
+
+// --- PCのキーボード操作 ---
+{
+  resetGame(true); G.mode = 'play';
+  const p = G.players[0];
+  const sx = p.x;
+  onKey(true, 'ArrowRight');
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('矢印キーで機体が右へ動く', p.x > sx + 20, `Δx=${(p.x - sx).toFixed(0)}`);
+  onKey(false, 'ArrowRight');
+  const sx2 = p.x;
+  onKey(true, 'ArrowLeft');
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('矢印キーで左へも戻せる', p.x < sx2 - 20, `Δx=${(p.x - sx2).toFixed(0)}`);
+  onKey(false, 'ArrowLeft');
+
+  // ひとり用は IJKM でも同じ機体を動かせる（I=上）
+  const sy = p.y;
+  onKey(true, 'i');
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('ひとり用はIキーで機体が上へ動く', p.y < sy - 10, `Δy=${(p.y - sy).toFixed(0)}`);
+  onKey(false, 'i');
+
+  // キーボード操作中は自動で撃つ
+  G.bullets.length = 0; p.cool = 0; p.stun = 0;
+  for (let i = 0; i < 20; i++) update(1/60);
+  check('キーボード操作中は自動で撃つ', G.bullets.length > 0, `弾=${G.bullets.length}`);
+
+  // ふたり用: 矢印=下のP1 / IJKM=上のP2
+  resetGame(false); G.mode = 'play';
+  const p1 = G.players[0], p2 = G.players[1];
+  const p1x = p1.x, p2x = p2.x;
+  onKey(true, 'ArrowRight');       // P1（下）だけ
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('ふたり用: 矢印は下のP1だけ動かす', p1.x > p1x + 20 && Math.abs(p2.x - p2x) < 1,
+        `P1Δ=${(p1.x - p1x).toFixed(0)} P2Δ=${(p2.x - p2x).toFixed(0)}`);
+  onKey(false, 'ArrowRight');
+  const p2x2 = p2.x;
+  onKey(true, 'k');                // P2（上）だけ 右へ
+  for (let i = 0; i < 30; i++) update(1/60);
+  check('ふたり用: IJKMは上のP2を動かす', p2.x > p2x2 + 20, `P2Δ=${(p2.x - p2x2).toFixed(0)}`);
+  onKey(false, 'k');
+
+  // 以降のテストのため状態を戻す
+  resetGame(false); G.mode = 'play';
   onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
 }
 

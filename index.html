@@ -447,9 +447,12 @@ function makeStars() {
 
 /* ---------------- ゲーム状態 ---------------- */
 const G = {
-  mode: 'title',          // title | play | pause | clear
+  mode: 'title',          // title | play | pause | clear | over
   t: 0,
   stage: 1,
+  survT: 0,               // ひとり用の生存時間（秒）
+  crush: 0,               // 自陣ラインを越えて積もっている行数（警告表示用）
+  overInfo: null,         // ゲームオーバー時の記録 {t, score}
   solo: false,            // ひとり用（青のプレイヤーだけ）
   score: 0,
   players: [],
@@ -498,6 +501,7 @@ function makePlayer(idx) {
     firing: false,
     pointer: -1,
     stack: [],                           // その側に触れている指（最初の1本が操作中）
+    kbd: false,                          // PCのキーボードで操作中か（一度使うと有効）
   };
 }
 
@@ -578,18 +582,49 @@ const BLOCK_DEBUT = { [B_BRICK]: 2, [B_ROCK]: 4, [B_DIAMOND]: 7 };
 // 1マスぶんより耐久が高く、掘り応えがある
 const MEGA_DEBUT = 10;
 const MEGA_HP = { [B_BRICK]: 520, [B_ROCK]: 1150, [B_DIAMOND]: 2400 };
-const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[] };
+
+// ひとり用（エンドレス生存）: 畑がじわじわ迫り、自陣ラインを LOSE_ROWS 行ぶん
+// 越えられたらゲームオーバー。掘り返して押し戻せば持ちこたえられる。
+const LOSE_ROWS = 3;
+const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[], scrollY:0, dangerY:0 };
 
 function idxAt(c, r) { return r * FIELD.cols + c; }
 function blockAt(c, r) {
   if (c < 0 || r < 0 || c >= FIELD.cols || r >= FIELD.rows) return null;
   return FIELD.grid[idxAt(c, r)];
 }
+// scrollY はひとり用で畑が下へ流れるぶんのずれ（ふたり用は常に0）
 function cellCenter(c, r) {
-  return { x: FIELD.x0 + (c + 0.5) * FIELD.cell, y: FIELD.y0 + (r + 0.5) * FIELD.cell };
+  return { x: FIELD.x0 + (c + 0.5) * FIELD.cell, y: FIELD.y0 + (r + 0.5) * FIELD.cell + FIELD.scrollY };
+}
+// 画面上の y から畑の行番号を求める（スクロールぶんを差し引く）
+function rowAtY(y) { return Math.floor((y - FIELD.y0 - FIELD.scrollY) / FIELD.cell); }
+
+// ステージ設定 S の割合にしたがって1マスぶんのブロックを1つ作る
+function rollBlock(S) {
+  const tDia   = S.diamondRate;
+  const tRock  = tDia + S.rockRate;
+  const tBrick = tRock + S.brickRate;
+  const tBomb  = tBrick + S.bombRate;
+  const tL0    = tBomb + S.lockRate;
+  const tL1    = tL0 + S.lockRate;
+  const rnd = Math.random();
+  let type = B_NORMAL;
+  if      (rnd < tDia)   type = B_DIAMOND;
+  else if (rnd < tRock)  type = B_ROCK;
+  else if (rnd < tBrick) type = B_BRICK;
+  else if (rnd < tBomb)  type = B_BOMB;
+  else if (rnd < tL0)    type = B_LOCK0;
+  else if (rnd < tL1)    type = B_LOCK1;
+  const hp = BLOCK_HP[type];
+  return { type, hp, maxHp: hp, star: false, flash: 0 };
 }
 
 function makeField(stage) {
+  FIELD.scrollY = 0;
+  FIELD.dangerY = 0;
+  if (G.solo) { makeSurvivalField(); return; }   // ひとり用は迫りくる畑
+
   const S = stageSetup(stage);
   // ブロックの寸法は画面サイズだけで決まる。段数は空いている高さから求める
   // 陣地の縁に張り付いた機体の砲口が畑にめり込まないだけの間隔を空ける
@@ -598,8 +633,7 @@ function makeField(stage) {
   const duoY1 = Z.bot.y0 - pad;
   const cell = Math.max(28, CELL);
 
-  // ひとり用では、2人目が使うはずだった上側の陣地まで畑を広げる
-  const topY = G.solo ? Z.top.y0 : duoY0;
+  const topY = duoY0;
   const rows = Math.max(1, Math.floor((duoY1 - topY) / cell));
 
   // 畑は機体が届く範囲だけに敷く。はみ出すと端の列が永久に掘れなくなる
@@ -613,24 +647,7 @@ function makeField(stage) {
   FIELD.y0 = duoY1 - rows * cell;      // 青プレイヤー側の入口の高さは常に同じ
   FIELD.grid = new Array(cols * rows);
 
-  const tDia   = S.diamondRate;
-  const tRock  = tDia + S.rockRate;
-  const tBrick = tRock + S.brickRate;
-  const tBomb  = tBrick + S.bombRate;
-  const tL0    = tBomb + S.lockRate;
-  const tL1    = tL0 + S.lockRate;
-  for (let i = 0; i < FIELD.grid.length; i++) {
-    const rnd = Math.random();
-    let type = B_NORMAL;
-    if      (rnd < tDia)   type = B_DIAMOND;
-    else if (rnd < tRock)  type = B_ROCK;
-    else if (rnd < tBrick) type = B_BRICK;
-    else if (rnd < tBomb)  type = B_BOMB;
-    else if (rnd < tL0)    type = B_LOCK0;
-    else if (rnd < tL1)    type = B_LOCK1;
-    const hp = BLOCK_HP[type];
-    FIELD.grid[i] = { type, hp, maxHp: hp, star: false, flash: 0 };
-  }
+  for (let i = 0; i < FIELD.grid.length; i++) FIELD.grid[i] = rollBlock(S);
 
   // ステージが進むと、4マスをまとめた大きいブロックを混ぜる
   if (stage >= MEGA_DEBUT) placeMegaBlocks(stage);
@@ -683,6 +700,110 @@ function ensureReachable() {
 }
 
 /* ============================================================
+   ひとり用: 迫りくる畑（エンドレス生存）
+   畑がじわじわ下へスクロールし、上から新しい行が補給され続ける。
+   自陣ライン（機体のいる帯の上端）を LOSE_ROWS 行ぶん越えられたら負け。
+============================================================ */
+// 生存時間から今の難度を「相当ステージ」に換算する
+function soloStage() { return 2 + Math.floor(G.survT / 14); }
+
+// スクロール速度（px/秒）。時間が経つほど速く迫る
+function soloScrollSpeed() {
+  return FIELD.cell * clamp(0.30 + G.survT * 0.006, 0.30, 1.5);
+}
+
+// ひとり用ではかけらは畑と同じく画面上部から降ってきて、機体が下で受け止める
+function soloChipX() { return rand(FIELD.x0 + 24, FIELD.x0 + FIELD.cols * FIELD.cell - 24); }
+const SOLO_CHIP_Y = -12;
+
+function makeSurvivalField() {
+  const cell = Math.max(28, CELL);
+  const inset = 20 * SHIP.scale;
+  const cols = Math.max(4, Math.floor((W - inset * 2) / cell));
+
+  FIELD.cell = cell;
+  FIELD.cols = cols;
+  FIELD.x0 = (W - cols * cell) / 2;
+  FIELD.y0 = -cell;                       // 一番上の行は画面の外から入ってくる
+  FIELD.scrollY = 0;
+  FIELD.dangerY = Z.bot.y0;               // ここを越えて積もると危険
+  // 画面上端の外から自陣ライン＋LOSE_ROWS行ぶんまで。末尾に1行だけ余白を足す
+  const rows = Math.ceil((FIELD.dangerY + LOSE_ROWS * cell - FIELD.y0) / cell) + 1;
+  FIELD.rows = rows;
+  FIELD.grid = new Array(cols * rows).fill(null);
+
+  const S = stageSetup(soloStage());
+  // 序盤は上のほうだけ埋め、機体との間に余白を残す。
+  // さらに5ブロックぶん上げて、開始直後の猶予を長めにとる
+  const fillTo = Math.max(1, Math.floor((H * 0.46 - FIELD.y0) / cell) - 5);
+  for (let r = 0; r <= fillTo && r < rows; r++)
+    for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, r)] = rollBlock(S);
+  tryPlaceMega(0, Math.min(fillTo, rows - 2), 1 + Math.floor(cols / 8));
+
+  G.starsTotal = 0; G.starsFound = 0;     // エンドレスではスター集めの目標はない
+}
+
+// 指定の行範囲に大きいブロックを count 個ぶん試し置きする
+function tryPlaceMega(rTop, rBot, count) {
+  const types = [B_BRICK, B_ROCK, B_DIAMOND];
+  let made = 0, tries = 0;
+  while (made < count && tries < 40) {
+    tries++;
+    const c = Math.floor(rand(0, FIELD.cols - 1));
+    const r = rTop + Math.floor(rand(0, Math.max(1, rBot - rTop + 1)));
+    if (!megaFits(c, r)) continue;
+    setMega(c, r, types[Math.floor(rand(0, types.length))]);
+    made++;
+  }
+}
+
+// 毎フレーム、畑を下へ流す。1マスぶん下がるたびに上へ新しい行を補給
+function scrollSurvival(dt) {
+  const cell = FIELD.cell;
+  FIELD.scrollY += soloScrollSpeed() * dt;
+  while (FIELD.scrollY >= cell) {
+    FIELD.scrollY -= cell;
+    commitSurvivalRow();
+  }
+}
+
+function commitSurvivalRow() {
+  const cols = FIELD.cols, rows = FIELD.rows;
+  // 全体を1行ぶん下へずらす（子ブロックは親との相対位置で持つのでずれない）
+  for (let r = rows - 1; r >= 1; r--)
+    for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, r)] = FIELD.grid[idxAt(c, r - 1)];
+  const S = stageSetup(soloStage());
+  for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, 0)] = rollBlock(S);
+  // 時間が経つほど大きいブロックが混ざりやすくなる（上の2行にまたがって置く）
+  const megaChance = clamp((G.survT - 12) * 0.012, 0, 0.5);
+  if (Math.random() < megaChance) tryPlaceMega(0, 1, 1);
+}
+
+// 自陣ラインを一番深く越えているブロックの、越えた量（px）を返す
+function survivalIntrusion() {
+  const cell = FIELD.cell, cols = FIELD.cols, rows = FIELD.rows;
+  let deepest = 0;
+  for (let c = 0; c < cols; c++) {
+    for (let r = rows - 1; r >= 0; r--) {          // 各列の一番下のブロックだけ見る
+      if (FIELD.grid[idxAt(c, r)]) {
+        const bottomY = FIELD.y0 + (r + 1) * cell + FIELD.scrollY;
+        if (bottomY - FIELD.dangerY > deepest) deepest = bottomY - FIELD.dangerY;
+        break;
+      }
+    }
+  }
+  return deepest;
+}
+
+function triggerGameOver() {
+  G.mode = 'over';
+  G.overInfo = { t: G.survT, score: G.score };
+  const p = G.players[0];
+  if (p) explode(p.x, p.y);              // 派手に散らして幕引き
+  G.shake = Math.max(G.shake, 26);
+}
+
+/* ============================================================
    大きいブロック（2×2）
    4マスをまとめて1つの正方形にする。左上を「親」として耐久を持ち、
    残る3マスは親を指す「子」にする。どのマスに当たっても親が削れ、
@@ -698,13 +819,14 @@ function megaFits(c, r) {
   return true;
 }
 
-// (c,r) を左上に、指定の種類の大きいブロックを敷く
+// (c,r) を左上に、指定の種類の大きいブロックを敷く。
+// 子は親への「相対位置」(ox,oy) を持つ。行ごとスクロールしても崩れないように。
 function setMega(c, r, type) {
   const hp = MEGA_HP[type];
   FIELD.grid[idxAt(c, r)] = { type, hp, maxHp: hp, star: false, flash: 0, mega: true };
   for (let dc = 0; dc <= 1; dc++) for (let dr = 0; dr <= 1; dr++) {
     if (!dc && !dr) continue;                 // 親はそのまま
-    FIELD.grid[idxAt(c + dc, r + dr)] = { slave: true, mc: c, mr: r, type };
+    FIELD.grid[idxAt(c + dc, r + dr)] = { slave: true, ox: -dc, oy: -dr, type };
   }
 }
 
@@ -728,7 +850,7 @@ function placeMegaBlocks(stage) {
 function breakBlock(c, r, ownerIdx, depth, noBomb) {
   const b = blockAt(c, r);
   if (!b) return;
-  if (b.slave) { breakBlock(b.mc, b.mr, ownerIdx, depth, noBomb); return; }
+  if (b.slave) { breakBlock(c + b.ox, r + b.oy, ownerIdx, depth, noBomb); return; }
   if (b.mega)  { breakMega(c, r, ownerIdx); return; }
   FIELD.grid[idxAt(c, r)] = null;
   const pos = cellCenter(c, r);
@@ -751,11 +873,13 @@ function breakBlock(c, r, ownerIdx, depth, noBomb) {
     burst(pos.x, pos.y, BLOCK_COLORS[b.type].edge, 12, 200, 5);
   }
 
-  // ときどき「かけら」が自陣側へ落ちる。拾うにはタテにも動く必要がある
+  // ときどき「かけら」が自陣側へ落ちる。拾うにはタテにも動く必要がある。
+  // ひとり用は畑と同じく画面上部から降ってくる。
   if (Math.random() < 0.14) {
-    const side = ownerIdx === 1 ? 1 : 0;          // 壊した人の側へ落とす
+    const side = G.solo ? 0 : (ownerIdx === 1 ? 1 : 0);   // 壊した人の側へ落とす
     G.chips.push({
-      x: pos.x, y: pos.y,
+      x: G.solo ? soloChipX() : pos.x,
+      y: G.solo ? SOLO_CHIP_Y : pos.y,
       vx: rand(-40, 40),
       vy: (side === 0 ? 1 : -1) * rand(90, 150),
       side, t: 0,
@@ -798,10 +922,11 @@ function breakMega(mc, mr, ownerIdx) {
   burst(cx, cy, pal.edge, 34, 360, 9);
   burst(cx, cy, '#ffffff', 12, 220, 5);
   G.shake = Math.max(G.shake, 12);
-  // 掘り応えのごほうびに、かけらを必ず落とす
-  const side = ownerIdx === 1 ? 1 : 0;
+  // 掘り応えのごほうびに、かけらを必ず落とす（ひとり用は画面上部から）
+  const side = G.solo ? 0 : (ownerIdx === 1 ? 1 : 0);
   G.chips.push({
-    x: cx, y: cy,
+    x: G.solo ? soloChipX() : cx,
+    y: G.solo ? SOLO_CHIP_Y : cy,
     vx: rand(-40, 40),
     vy: (side === 0 ? 1 : -1) * rand(90, 150),
     side, t: 0,
@@ -857,8 +982,8 @@ function damageBlock(c, r, dmg, ownerIdx, noBomb) {
   if (!hit) return 'none';
 
   // 大きいブロックはどのマスに当たっても親（左上）の耐久を削る
-  const bc = hit.slave ? hit.mc : c;
-  const br = hit.slave ? hit.mr : r;
+  const bc = hit.slave ? c + hit.ox : c;
+  const br = hit.slave ? r + hit.oy : r;
   const b = blockAt(bc, br);
   if (!b) return 'none';
 
@@ -881,6 +1006,7 @@ function damageBlock(c, r, dmg, ownerIdx, noBomb) {
 function resetGame(solo) {
   G.solo = !!solo;
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
+  G.survT = 0; G.crush = 0; G.overInfo = null;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
   G.blasts.length = 0; G.flash = 0;
@@ -890,7 +1016,9 @@ function resetGame(solo) {
   makeField(1);
   G.nextT = 0;
   G.shake = 0;
-  G.banner = { text: 'ステージ 1', life: 1.6 };
+  G.banner = G.solo
+    ? { text: 'せまるブロックをうち返せ！', life: 2.4 }
+    : { text: 'ステージ 1', life: 1.6 };
   pointers.clear();
 }
 
@@ -933,6 +1061,9 @@ function onDown(e) {
 
   // 自動再生制限の解除はユーザー操作の中でしかできない
   audioResume();
+
+  // ゲームオーバー画面はどこを触ってもタイトルへ戻る
+  if (G.mode === 'over') { G.mode = 'title'; G.banner = null; pointers.clear(); SFX.ui(); return; }
 
   // ポーズ中はどこを触っても再開。指の位置で機体が飛ばないよう入力には使わない
   if (G.mode === 'pause') { setPaused(false); return; }
@@ -1044,6 +1175,80 @@ function releaseAllPointers() {
   for (const p of G.players) { p.stack.length = 0; p.pointer = -1; p.firing = false; p.outside = false; }
 }
 
+/* ---------------- キーボード操作（PC） ----------------
+   矢印キー…下側プレイヤー（ひとり用の機体）。I/J/K/M…上側プレイヤー。
+   ひとり用では矢印・IJKM のどちらでも同じ機体を動かせる。
+   I=上 J=左 K=右 M=下 のひし形配置。 */
+const keys = new Set();
+// 押されているキーから、そのプレイヤーの移動方向(-1..1)を求める
+function kbdVec(idx) {
+  let dx = 0, dy = 0;
+  const arrows = idx === 0;                 // 下側は矢印キー
+  const ijkm   = idx === 1 || G.solo;       // 上側と、ひとり用の機体は IJKM
+  if (arrows) {
+    if (keys.has('ArrowLeft'))  dx -= 1;
+    if (keys.has('ArrowRight')) dx += 1;
+    if (keys.has('ArrowUp'))    dy -= 1;
+    if (keys.has('ArrowDown'))  dy += 1;
+  }
+  if (ijkm) {
+    if (keys.has('j')) dx -= 1;
+    if (keys.has('k')) dx += 1;
+    if (keys.has('i')) dy -= 1;
+    if (keys.has('m')) dy += 1;
+  }
+  return { dx, dy };
+}
+
+// キーボードで操作中の機体を動かす（毎フレーム、指の操作が無いときだけ）
+function applyKeyboard(p, dt) {
+  if (!p.kbd || p.pointer !== -1) return;
+  const v = kbdVec(p.idx);
+  const spd = W * 1.15;                      // 陣地を0.8秒ほどで横断する速さ
+  if (v.dx || v.dy) {
+    p.tx += v.dx * spd * dt;
+    p.ty += v.dy * spd * dt;
+    clampPlayer(p);
+  }
+  p.outside = false;
+  p.firing = true;                           // キーボード中は撃ちっぱなし
+  const k = 1 - Math.pow(0.0000015, dt);
+  p.x += (p.tx - p.x) * k;
+  p.y += (p.ty - p.y) * k;
+  clampPlayer(p);
+}
+
+// このキーがどのプレイヤーのものか（-1=無関係）
+function keyOwner(key) {
+  if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') return 0;
+  if (key === 'i' || key === 'j' || key === 'k' || key === 'm') return G.solo ? 0 : 1;
+  return -1;
+}
+
+function onKey(down, rawKey) {
+  const key = rawKey.length === 1 ? rawKey.toLowerCase() : rawKey;
+  const owner = keyOwner(key);
+  if (owner === -1) return false;
+  if (down) keys.add(key); else keys.delete(key);
+  if (down && G.mode === 'play') {
+    const p = G.players[owner];
+    if (p) {
+      if (!p.kbd) { p.tx = p.x; p.ty = p.y; }      // 現在位置から動き出す（飛ばない）
+      p.kbd = true; p.outside = false;             // 以後この機体はキーボードで動く
+    }
+  }
+  return true;                                     // 扱ったキー＝既定動作（ページスクロール等）を止める
+}
+
+window.addEventListener('keydown', e => {
+  if (e.repeat) { if (keyOwner(e.key.length === 1 ? e.key.toLowerCase() : e.key) !== -1) e.preventDefault(); return; }
+  audioResume();
+  if (onKey(true, e.key)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { if (onKey(false, e.key)) e.preventDefault(); });
+// フォーカスが外れたら押しっぱなしを解除
+window.addEventListener('blur', () => keys.clear());
+
 cv.addEventListener('pointerdown',   onDown,  { passive:false });
 cv.addEventListener('pointermove',   onMove,  { passive:false });
 cv.addEventListener('pointerup',     onUp,    { passive:false });
@@ -1145,9 +1350,21 @@ function update(dt) {
       clampPlayer(p);
     }
 
+    // PCのキーボード操作（指が触れていないときだけ効く）
+    applyKeyboard(p, dt);
+
     p.stun = Math.max(0, p.stun - dt);
     p.cool -= dt;
     if (p.firing && p.stun <= 0 && p.cool <= 0) playerShoot(p);
+  }
+
+  /* --- ひとり用: 迫りくる畑と生存判定 --- */
+  if (G.solo) {
+    G.survT += dt;
+    scrollSurvival(dt);
+    const over = survivalIntrusion();
+    G.crush = over / FIELD.cell;
+    if (over >= LOSE_ROWS * FIELD.cell) { triggerGameOver(); return; }
   }
 
   /* --- ステージ進行 --- */
@@ -1214,9 +1431,9 @@ function update(dt) {
     }
     if (hitBug && !b.pierce) { G.bullets.splice(i, 1); continue; }
 
-    // ブロックに当たったら削る
+    // ブロックに当たったら削る（ひとり用は畑が流れるので scrollY を差し引く）
     const c = Math.floor((b.x - FIELD.x0) / FIELD.cell);
-    const r = Math.floor((b.y - FIELD.y0) / FIELD.cell);
+    const r = rowAtY(b.y);
     // 巨大レーザーは太いので、重なっている列をまとめて削る
     if (b.giant) {
       const cL = Math.floor((b.x - b.r - FIELD.x0) / FIELD.cell);
@@ -1347,7 +1564,7 @@ function update(dt) {
   /* --- おじゃまむし --- */
   G.bugT -= dt;
   if (G.bugT <= 0) {
-    G.bugT = stageSetup(G.stage).bugEvery * rand(0.8, 1.25);
+    G.bugT = stageSetup(G.solo ? soloStage() : G.stage).bugEvery * rand(0.8, 1.25);
     spawnBug();
   }
   for (let i = G.bugs.length - 1; i >= 0; i--) {
@@ -1390,10 +1607,11 @@ function dropPowerChip(idx, x, y) {
   if (!p) return false;
   // 両方とも最大まで強化済みなら、代わりに巨大レーザーの球を落とす
   const kind = nextPowerKind(p) || 'laser';
-  const side = idx === 1 ? 1 : 0;
+  // ひとり用は畑と同じく画面上部から降ってくる。ふたり用は落とした場所/自陣の縁から
+  const side = G.solo ? 0 : (idx === 1 ? 1 : 0);
   G.chips.push({
-    x: x !== undefined ? x : rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30),
-    y: y !== undefined ? y : (side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0),
+    x: G.solo ? soloChipX() : (x !== undefined ? x : rand(FIELD.x0 + 30, FIELD.x0 + FIELD.cols * FIELD.cell - 30)),
+    y: G.solo ? SOLO_CHIP_Y : (y !== undefined ? y : (side === 0 ? FIELD.y0 + FIELD.rows * FIELD.cell : FIELD.y0)),
     vx: rand(-25, 25),
     vy: (side === 0 ? 1 : -1) * 60,
     side, t: 0, power: true, kind,
@@ -1421,7 +1639,16 @@ function fireGiantLaser(p) {
 
 function spawnBug() {
   if (!FIELD.cell) return;
-  const side = G.solo ? 0 : (Math.random() < 0.5 ? 0 : 1);   // どちらの陣地へ向かうか
+  if (G.solo) {                                   // 迫る畑の隙間から機体めがけて降りてくる
+    G.bugs.push({
+      x: rand(FIELD.x0 + 20, FIELD.x0 + FIELD.cols * FIELD.cell - 20),
+      y: Z.top.y1, vy: rand(70, 110),
+      r: 17, hp: 16, side: 0, t: rand(0, 6), flash: 0,
+    });
+    SFX.bugOut();
+    return;
+  }
+  const side = Math.random() < 0.5 ? 0 : 1;       // どちらの陣地へ向かうか
   const fy0 = FIELD.y0, fy1 = FIELD.y0 + FIELD.rows * FIELD.cell;
   G.bugs.push({
     x: rand(FIELD.x0 + 20, FIELD.x0 + FIELD.cols * FIELD.cell - 20),
@@ -1446,7 +1673,7 @@ function collectGem(g, ownerIdx) {
   burst(g.x, g.y, '#fff6c8', 18, 220, 6);
   G.shake = Math.max(G.shake, 12);
 
-  if (G.starsFound >= G.starsTotal) {
+  if (!G.solo && G.starsFound >= G.starsTotal) {
     G.score += 500 * G.stage;
     // 10ステージごとは節目として、長めのお祝いを挟む
     const milestone = G.stage % 10 === 0;
@@ -1518,7 +1745,8 @@ function draw() {
   if (G.celebrate) drawCelebrate();
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'pause') drawPauseOverlay();
-  if (G.banner) drawBanner(G.banner);
+  if (G.mode === 'over') drawGameOver();
+  if (G.banner && G.mode !== 'over') drawBanner(G.banner);
   // オーバーレイに隠れず、画面揺れの影響も受けないよう最後に描く
   drawFsButton();
   drawMuteButton();
@@ -1730,13 +1958,15 @@ function drawShip(p) {
 function drawField() {
   const cell = FIELD.cell;
   if (!cell) return;
+  if (G.solo) drawDangerLine();
   ctx.save();
+  const sY = FIELD.scrollY;                   // 畑の下降ぶん（ふたり用は0）
   for (let r = 0; r < FIELD.rows; r++) {
     for (let c = 0; c < FIELD.cols; c++) {
       const b = FIELD.grid[idxAt(c, r)];
       if (!b || b.slave) continue;             // 子マスは親がまとめて描く
       const span = b.mega ? 2 : 1;             // 大きいブロックは2マスぶん
-      const x = FIELD.x0 + c * cell, y = FIELD.y0 + r * cell;
+      const x = FIELD.x0 + c * cell, y = FIELD.y0 + r * cell + sY;
       const pad = cell * 0.055;
       const w = cell * span - pad * 2;
       const wear = b.hp / b.maxHp;             // 削れるほど暗く小さくなる
@@ -1773,6 +2003,29 @@ function drawField() {
       ctx.globalAlpha = 1;
     }
   }
+  ctx.restore();
+}
+
+// ひとり用の自陣ライン。越えられているほど赤く強く光り、危険帯を染める
+function drawDangerLine() {
+  const dy = FIELD.dangerY;
+  if (!dy) return;
+  const warn = clamp(G.crush / LOSE_ROWS, 0, 1);     // 0=安全 .. 1=あと少しで負け
+  const pulse = 0.6 + 0.4 * Math.sin(G.t * 8);
+  ctx.save();
+  // 越えられているぶんだけ危険帯を赤く塗る
+  if (warn > 0) {
+    ctx.globalAlpha = (0.10 + 0.22 * warn) * pulse;
+    ctx.fillStyle = '#ff3b30';
+    ctx.fillRect(0, dy, W, H - dy);
+  }
+  // ライン本体
+  ctx.globalAlpha = 0.5 + 0.5 * warn * pulse;
+  ctx.strokeStyle = warn > 0.02 ? '#ff5a48' : 'rgba(255,150,90,0.6)';
+  ctx.lineWidth = 2 + 2 * warn;
+  ctx.setLineDash([16, 12]);
+  ctx.beginPath(); ctx.moveTo(0, dy); ctx.lineTo(W, dy); ctx.stroke();
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
@@ -2277,6 +2530,27 @@ function drawPauseOverlay() {
   ctx.restore();
 }
 
+function drawGameOver() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,6,18,0.78)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.translate(W / 2, Z.cy);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ff5c5c'; ctx.shadowColor = '#ff5c5c'; ctx.shadowBlur = 26;
+  ctx.font = '900 46px system-ui, sans-serif';
+  ctx.fillText('GAME OVER', 0, -74);
+  ctx.shadowBlur = 0;
+  const info = G.overInfo || { t: 0, score: 0 };
+  ctx.fillStyle = '#fff';
+  ctx.font = '800 26px system-ui, sans-serif';
+  ctx.fillText(`生存 ${info.t.toFixed(1)} 秒`, 0, -8);
+  ctx.fillText(`SCORE ${info.score}`, 0, 34);
+  ctx.globalAlpha = 0.55 + 0.45 * Math.sin(G.t * 4);
+  ctx.font = '700 18px system-ui, sans-serif';
+  ctx.fillText('タップでタイトルへ', 0, 100);
+  ctx.restore();
+}
+
 function drawFsButton() {
   if (!FS.supported) return;
   const b = FS.btn, full = isFullscreen();
@@ -2312,6 +2586,18 @@ function drawParts() {
 /* --- HUD --- */
 function drawHUD() {
   for (const p of G.players) drawPlayerHUD(p);
+
+  if (G.solo) {
+    // ひとり用は生存タイムとスコアを画面上端中央に（機体は下だけなので正立）
+    ctx.save();
+    ctx.translate(W / 2, 42);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font = '800 18px system-ui, sans-serif';
+    ctx.fillText(`⏱ ${G.survT.toFixed(0)} 秒    ${G.score}`, 0, 0);
+    ctx.restore();
+    return;
+  }
 
   // 中央に進捗（両側から読めるよう2方向に描画）
   for (const flip of [0, 1]) {
