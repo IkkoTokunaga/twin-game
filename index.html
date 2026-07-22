@@ -451,6 +451,7 @@ const G = {
   t: 0,
   stage: 1,
   survT: 0,               // ひとり用の生存時間（秒）
+  soloTier: 1,            // ひとり用で今どこまで難度が上がったか（告知ずみの段階）
   crush: 0,               // 自陣ラインを越えて積もっている行数（負け判定用）
   approach: 0,            // 一番下のブロックとラインの符号つき距離（px・警告用）
   overInfo: null,         // ゲームオーバー時の記録 {t, score}
@@ -591,6 +592,12 @@ const BLOCK_DEBUT = { [B_BRICK]: 2, [B_ROCK]: 4, [B_DIAMOND]: 7 };
 // 1マスぶんより耐久が高く、掘り応えがある
 const MEGA_DEBUT = 10;
 const MEGA_HP = { [B_BRICK]: 520, [B_ROCK]: 1150, [B_DIAMOND]: 2400 };
+// 大きいブロックは、その硬さが普通サイズで出てから MEGA_LAG 段階あとに解禁する。
+// いきなり大きいダイヤ（2400）が出ると、弱い弾では手も足も出ないため。
+const MEGA_LAG = 2;
+function megaTypesFor(n) {
+  return [B_BRICK, B_ROCK, B_DIAMOND].filter(t => n >= BLOCK_DEBUT[t] + MEGA_LAG);
+}
 
 // ひとり用（エンドレス生存）: 畑がじわじわ迫り、自陣ラインを LOSE_ROWS 行ぶん
 // 越えられたらゲームオーバー。掘り返して押し戻せば持ちこたえられる。
@@ -721,8 +728,26 @@ function ensureReachable() {
    畑がじわじわ下へスクロールし、上から新しい行が補給され続ける。
    自陣ライン（機体のいる帯の上端）を LOSE_ROWS 行ぶん越えられたら負け。
 ============================================================ */
-// 生存時間から今の難度を「相当ステージ」に換算する
-function soloStage() { return 2 + Math.floor(G.survT / 14); }
+// 生存時間から今の難度を「相当ステージ」に換算する。
+// 段階1（＝ふつうのブロックだけ）から始めて、SOLO_STEP 秒ごとに1段階上げる。
+// BLOCK_DEBUT / MEGA_LAG により、レンガ15秒・いわ45秒・ダイヤ90秒、
+// 大きいブロックはレンガ45秒→いわ75秒→ダイヤ120秒の順で解禁される。
+const SOLO_STEP = 15;
+function soloStage() { return 1 + Math.floor(G.survT / SOLO_STEP); }
+
+// 難度が一段上がった瞬間に、新しく出るブロックを知らせる。
+// ふたり用でステージが変わるときの告知と同じ役目。
+function announceSoloTier() {
+  const n = soloStage();
+  if (n <= G.soloTier) return;
+  G.soloTier = n;
+  const debut = Object.keys(BLOCK_DEBUT).find(t => BLOCK_DEBUT[t] === n);
+  if (debut) G.banner = { text: `あたらしいブロック: ${BLOCK_NAME[debut]}`, life: 2.2 };
+  else if (megaTypesFor(n).length > megaTypesFor(n - 1).length)
+    G.banner = { text: 'おおきいブロックがくる！', life: 2.2 };
+  else return;
+  SFX.stage();
+}
 
 // スクロール速度（px/秒）。時間が経つほど速く迫る
 function soloScrollSpeed() {
@@ -753,14 +778,16 @@ function makeSurvivalField() {
   const fillTo = Math.max(1, Math.floor((H * 0.46 - FIELD.y0) / cell) - 5);
   for (let r = 0; r <= fillTo && r < rows; r++)
     for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, r)] = rollBlock(S);
-  tryPlaceMega(0, Math.min(fillTo, rows - 2), 1 + Math.floor(cols / 8));
+  // 開始直後は大きいブロックを置かない（解禁前は megaTypesFor が空になる）
+  const megaT = megaTypesFor(soloStage());
+  if (megaT.length) tryPlaceMega(0, Math.min(fillTo, rows - 2), 1 + Math.floor(cols / 8), megaT);
 
   G.starsTotal = 0; G.starsFound = 0;     // エンドレスではスター集めの目標はない
 }
 
-// 指定の行範囲に大きいブロックを count 個ぶん試し置きする
-function tryPlaceMega(rTop, rBot, count) {
-  const types = [B_BRICK, B_ROCK, B_DIAMOND];
+// 指定の行範囲に、解禁済みの種類 types から大きいブロックを count 個ぶん試し置きする
+function tryPlaceMega(rTop, rBot, count, types) {
+  if (!types || !types.length) return;
   let made = 0, tries = 0;
   while (made < count && tries < 40) {
     tries++;
@@ -787,11 +814,13 @@ function commitSurvivalRow() {
   // 全体を1行ぶん下へずらす（子ブロックは親との相対位置で持つのでずれない）
   for (let r = rows - 1; r >= 1; r--)
     for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, r)] = FIELD.grid[idxAt(c, r - 1)];
-  const S = stageSetup(soloStage());
+  const n = soloStage();
+  const S = stageSetup(n);
   for (let c = 0; c < cols; c++) FIELD.grid[idxAt(c, 0)] = rollBlock(S);
-  // 時間が経つほど大きいブロックが混ざりやすくなる（上の2行にまたがって置く）
-  const megaChance = clamp((G.survT - 12) * 0.012, 0, 0.5);
-  if (Math.random() < megaChance) tryPlaceMega(0, 1, 1);
+  // 解禁後は、時間が経つほど大きいブロックが混ざりやすくなる（上の2行にまたがって置く）
+  const firstMegaT = (BLOCK_DEBUT[B_BRICK] + MEGA_LAG - 1) * SOLO_STEP;   // 最初の解禁時刻（秒）
+  const megaChance = clamp((G.survT - firstMegaT) * 0.01, 0, 0.45);
+  if (Math.random() < megaChance) tryPlaceMega(0, 1, 1, megaTypesFor(n));
 }
 
 // 自陣ラインに一番近づいているブロックの、ラインとの距離（px）を返す。
@@ -850,7 +879,8 @@ function placeMegaBlocks(stage) {
   const cols = FIELD.cols, rows = FIELD.rows;
   // ステージが進むほど数を増やす。畑の広さで頭打ち
   const want = Math.min(2 + Math.floor((stage - MEGA_DEBUT) / 3), Math.floor(cols * rows / 12));
-  const types = [B_BRICK, B_ROCK, B_DIAMOND];
+  const types = megaTypesFor(stage);
+  if (!types.length) return;
   let made = 0, tries = 0;
   while (made < want && tries < 80) {
     tries++;
@@ -1022,7 +1052,7 @@ function damageBlock(c, r, dmg, ownerIdx, noBomb) {
 function resetGame(solo) {
   G.solo = !!solo;
   G.stage = 1; G.score = 0; G.t = 0; G.stageT = 0;
-  G.survT = 0; G.crush = 0; G.approach = 0; G.overInfo = null;
+  G.survT = 0; G.soloTier = 1; G.crush = 0; G.approach = 0; G.overInfo = null;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
   G.blasts.length = 0; G.flash = 0;
@@ -1377,6 +1407,7 @@ function update(dt) {
   /* --- ひとり用: 迫りくる畑と生存判定 --- */
   if (G.solo) {
     G.survT += dt;
+    announceSoloTier();
     scrollSurvival(dt);
     const deep = survivalIntrusion();          // ライン基準の符号つき距離（越え=正）
     G.approach = deep;                          // 警告用（手前でも負の値で持つ）

@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -563,6 +563,51 @@ check('畑が中央帯に収まる',
     locks += FIELD.grid.filter(b => b && (b.type === B_LOCK0 || b.type === B_LOCK1)).length;
   }
   check('ひとり用では色つきブロックが出ない', locks === 0, `色つき=${locks}`);
+
+  // 難度は段階的に上がる: 最初の畑はふつうのブロック（＋ばくだん）だけ
+  let hard = 0, megas = 0;
+  for (let i = 0; i < 40; i++) {
+    resetGame(true);
+    for (const b of FIELD.grid) {
+      if (!b || b.slave) continue;
+      if (b.mega) megas++;
+      if (b.type === B_BRICK || b.type === B_ROCK || b.type === B_DIAMOND) hard++;
+    }
+  }
+  check('開始時の畑に硬いブロックは無い', hard === 0, `硬いブロック=${hard}`);
+  check('開始時の畑に大きいブロックは無い', megas === 0, `大ブロック=${megas}`);
+
+  // 補給される行の中身も、生存時間に応じて解禁されていく
+  const supply = (t, n) => {
+    resetGame(true); G.survT = t;
+    const seen = { hard: 0, dia: 0, mega: 0 };
+    for (let i = 0; i < n; i++) {
+      const was = FIELD.grid.filter(b => b && b.mega).length;
+      commitSurvivalRow();
+      seen.mega += Math.max(0, FIELD.grid.filter(b => b && b.mega).length - was);
+      for (let c = 0; c < FIELD.cols; c++) {
+        const b = FIELD.grid[idxAt(c, 0)];
+        if (!b || b.slave) continue;
+        if (b.type === B_BRICK || b.type === B_ROCK || b.type === B_DIAMOND) seen.hard++;
+        if (b.type === B_DIAMOND) seen.dia++;
+      }
+    }
+    return seen;
+  };
+  const s10 = supply(10, 200), s40 = supply(40, 200), s200 = supply(200, 200);
+  check('10秒までは硬いブロックが出ない', s10.hard === 0, `硬いブロック=${s10.hard}`);
+  check('40秒では硬いブロックが出ている（ダイヤと大ブロックはまだ）',
+        s40.hard > 0 && s40.dia === 0 && s40.mega === 0,
+        `硬=${s40.hard} ダイヤ=${s40.dia} 大=${s40.mega}`);
+  check('十分あとではダイヤも大きいブロックも出る', s200.dia > 0 && s200.mega > 0,
+        `ダイヤ=${s200.dia} 大=${s200.mega}`);
+
+  // 段階が上がると告知が出る
+  resetGame(true); G.mode = 'play';
+  G.survT = SOLO_STEP * 1.5; G.banner = null;
+  update(1 / 60);
+  check('新しいブロックの解禁が告知される', !!(G.banner && /レンガ/.test(G.banner.text)),
+        `banner=${G.banner && G.banner.text}`);
 
   // 上側を触っても何も起きない
   resetGame(true); G.mode = 'play';
