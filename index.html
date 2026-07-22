@@ -461,6 +461,7 @@ const G = {
   bullets: [],            // プレイヤー弾
   gems: [],               // 掘り出されたスター
   chips: [],              // ブロックから落ちるかけら（拾うとチャージ）
+  clones: [],             // 分身（数秒だけ本人と逆に動いて撃つ）
   bugs: [],               // おじゃまむし（当たると一時停止）
   bugT: 0,                // 次のおじゃまむしまでの秒数
   blasts: [],             // 爆発の衝撃波
@@ -845,6 +846,7 @@ function triggerGameOver() {
   G.overInfo = { t: G.survT, score: G.score };
   const p = G.players[0];
   if (p) explode(p.x, p.y);              // 派手に散らして幕引き
+  G.clones.length = 0;                   // 分身も本人と一緒に消える
   G.shake = Math.max(G.shake, 26);
 }
 
@@ -1055,6 +1057,7 @@ function resetGame(solo) {
   G.survT = 0; G.soloTier = 1; G.crush = 0; G.approach = 0; G.overInfo = null;
   G.bullets.length = 0; G.gems.length = 0; G.parts.length = 0;
   G.chips.length = 0; G.bugs.length = 0; G.bugT = 4;
+  G.clones.length = 0;
   G.blasts.length = 0; G.flash = 0;
   G.celebrate = null;
   // ひとり用は青（下側）のみ。上側は生成しないので、そちらを触っても何も起きない
@@ -1404,6 +1407,8 @@ function update(dt) {
     if (p.firing && p.stun <= 0 && p.cool <= 0) playerShoot(p);
   }
 
+  updateClones(dt);
+
   /* --- ひとり用: 迫りくる畑と生存判定 --- */
   if (G.solo) {
     G.survT += dt;
@@ -1422,7 +1427,7 @@ function update(dt) {
     if (G.nextT <= 0) {
       G.nextT = 0;
       G.stage++;
-      G.bullets.length = 0; G.bugs.length = 0;
+      G.bullets.length = 0; G.bugs.length = 0; G.clones.length = 0;
       // 強化のかけらは持ち越す（落ちてくる途中でステージが変わっても損しないように）
       G.chips = G.chips.filter(ch => ch.power);
       G.blasts.length = 0; G.flash = 0;
@@ -1568,6 +1573,8 @@ function update(dt) {
           p.powers++;
           if (ch.kind === 'laser') {
             fireGiantLaser(p);
+          } else if (ch.kind === 'clone') {
+            spawnClone(p);
           } else if (ch.kind === 'shot') {
             if (p.shot < SHOT_LEVELS.length - 1) p.shot++;
           } else {
@@ -1664,8 +1671,10 @@ function dropPowerChip(idx, x, y) {
   if (!FIELD.cell) return false;
   const p = G.players[idx];
   if (!p) return false;
-  // 両方とも最大まで強化済みなら、代わりに巨大レーザーの球を落とす
-  const kind = nextPowerKind(p) || 'laser';
+  // 両方とも最大まで強化済みなら、代わりに巨大レーザーの球を落とす。
+  // そのうちいくらかは分身のかけらに化ける
+  const kind = nextPowerKind(p) ||
+               (Math.random() < CLONE_CHIP_RATE ? 'clone' : 'laser');
   const fromTop = G.solo && x === undefined;
   const side = G.solo ? 0 : (idx === 1 ? 1 : 0);
   G.chips.push({
@@ -1724,6 +1733,75 @@ function sowBombBlocks(count) {
     made++;
   }
   return made;
+}
+
+/* ============================================================
+   分身
+   強化しきったあとに落ちてくる「レーザーのかけら」の代わりに、
+   ときどきこちらが落ちてくる。受け止めると、機体が動ける枠の中を
+   本人と逆向きに動くピンクの分身が、数秒だけ並んで撃ちこむ。
+============================================================ */
+const CLONE_CHIP_RATE = 1 / 3;     // レーザーのかけらの代わりに分身のかけらが出る確率
+const CLONE_TIME = 5;              // 分身がいる時間（秒）
+const CLONE_COLOR = { main:'#ff5cc8', glow:'#f0a' };
+
+// 分身の位置は、機体が動ける枠の中で本人を点対称にうつしたところ。
+// 本人が右へ動けば分身は左へ、下がれば分身は上がる。
+function clonePos(p) {
+  const rc = zoneRect(p.bottom);
+  return { x: rc.x0 + rc.x1 - p.x, y: rc.y0 + rc.y1 - p.y };
+}
+
+function spawnClone(p) {
+  const pos = clonePos(p);
+  G.clones.push({
+    idx: p.idx, bottom: p.bottom, dirY: p.dirY,
+    x: pos.x, y: pos.y, life: CLONE_TIME, cool: 0,
+    // 見た目は本人と同じ豪華さにする（drawShip をそのまま使うための一式）
+    shot: p.shot, beam: p.beam, charge: 0, maxCharge: 100,
+    pointer: -1, stun: 0,
+  });
+  burst(pos.x, pos.y, CLONE_COLOR.main, 30, 360, 7);
+  G.shake = Math.max(G.shake, 10);
+  G.banner = { text: 'ぶんしん とうじょう！', life: 1.8 };
+}
+
+function updateClones(dt) {
+  for (let i = G.clones.length - 1; i >= 0; i--) {
+    const cl = G.clones[i];
+    const p = G.players[cl.idx];
+    cl.life -= dt;
+    if (cl.life <= 0 || !p) {
+      burst(cl.x, cl.y, CLONE_COLOR.main, 22, 300, 6);
+      G.clones.splice(i, 1);
+      continue;
+    }
+    const pos = clonePos(p);
+    cl.x = pos.x; cl.y = pos.y;
+    cl.shot = p.shot; cl.beam = p.beam;     // 途中で強化されたら分身にも反映する
+    cl.cool -= dt;
+    if (cl.cool <= 0) cloneShoot(cl);
+  }
+}
+
+// 分身が撃つのは扇状ビームだけ（強攻撃は本人の特権）
+function cloneShoot(cl) {
+  const sl = SHOT_LEVELS[Math.min(cl.shot, SHOT_LEVELS.length - 1)];
+  const half = (sl.n - 1) / 2;
+  const muzzle = cl.y + cl.dirY * 20 * SHIP.scale;
+  for (let k = 0; k < sl.n; k++) {
+    const a = (k - half) / Math.max(1, half) * sl.spread;
+    G.bullets.push({
+      x: cl.x + Math.sin(a) * 14 * SHIP.scale,
+      y: muzzle,
+      vx: Math.sin(a) * 1150,
+      vy: cl.dirY * Math.cos(a) * 1150,
+      // 弾の持ち主は本人。色つきブロックも本人と同じように壊せる
+      r: sl.r, dmg: sl.dmg, owner: cl.idx, pierce: false, color: CLONE_COLOR.main,
+    });
+  }
+  SFX.shot(1);                              // 本人より高い音で、分身の弾だと分かるように
+  cl.cool = sl.cool;
 }
 
 // 取った瞬間に前方へ撃つ巨大レーザー。
@@ -1832,6 +1910,7 @@ function draw() {
     drawBlasts();
     for (const b of G.bullets) drawBullet(b);
     for (const p of G.players) drawShip(p);
+    drawClones();
     drawParts();
     drawHUD();
   } else {
@@ -1926,8 +2005,25 @@ function roundRect(c, x, y, w, h, r) {
   c.closePath();
 }
 
-function drawShip(p) {
-  const c = P_COLORS[p.idx];
+// 分身。姿は本人と同じで色だけピンク。消える間際は点滅して知らせる
+function drawClones() {
+  for (const cl of G.clones) {
+    if (cl.life < 1.2 && Math.floor(cl.life * 10) % 2 === 0) continue;
+    // 足もとに広がる淡い光。本人と見分けやすくする
+    ctx.save();
+    const halo = ctx.createRadialGradient(cl.x, cl.y, 0, cl.x, cl.y, 46);
+    halo.addColorStop(0, 'rgba(255,92,200,0.35)');
+    halo.addColorStop(1, 'rgba(255,92,200,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(cl.x, cl.y, 46, 0, TAU); ctx.fill();
+    ctx.restore();
+    drawShip(cl, CLONE_COLOR);
+  }
+}
+
+// col を渡すと機体の色を差し替える（分身用）
+function drawShip(p, col) {
+  const c = col || P_COLORS[p.idx];
   // 指と機体をつなぐガイド（オフセットしていることが直感的にわかるように）
   if (p.pointer !== -1 && !p.outside) {
     ctx.save();

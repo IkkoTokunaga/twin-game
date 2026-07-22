@@ -360,8 +360,9 @@ check('畑が中央帯に収まる',
                    owner: 0, pierce: false, color: '#fff' });
   update(1/60);
   const bugOrb = G.chips.find(c => c.power);
-  check('最大まで強化済みなら倒すと巨大レーザーの球が出る',
-        bugOrb && bugOrb.kind === 'laser', `kind=${bugOrb && bugOrb.kind}`);
+  check('最大まで強化済みなら倒すと巨大レーザーか分身の球が出る',
+        bugOrb && (bugOrb.kind === 'laser' || bugOrb.kind === 'clone'),
+        `kind=${bugOrb && bugOrb.kind}`);
   p.beam = 0; p.shot = 0; G.chips.length = 0; G.bullets.length = 0;
 
   // --- ダメージを受けると1段階下がる ---
@@ -395,7 +396,8 @@ check('畑が中央帯に収まる',
   p.caught = 0;
   for (let i = 0; i < CHIPS_PER_POWER; i++) put(false);
   const orb = G.chips.find(c => c.power);
-  check('両方とも最大なら巨大レーザーの球が出る', orb && orb.kind === 'laser',
+  check('両方とも最大なら巨大レーザーか分身の球が出る',
+        orb && (orb.kind === 'laser' || orb.kind === 'clone'),
         `kind=${orb && orb.kind}`);
 
   // 取った瞬間に前方へ巨大レーザーが出る
@@ -463,6 +465,22 @@ check('畑が中央帯に収まる',
   check('片方が最大なら、もう片方の強化が出る', only && only.kind === 'shot',
         `kind=${only && only.kind}`);
   G.chips.length = 0;
+
+  // --- 最大まで強化済みのかけらは、たまに分身のかけらになる ---
+  p.beam = BEAM_LEVELS.length - 1;
+  p.shot = SHOT_LEVELS.length - 1;
+  p.stun = 0;
+  let clones = 0, lasers = 0;
+  for (let i = 0; i < 600; i++) {
+    G.chips.length = 0;
+    dropPowerChip(0, p.x, p.y - 200);
+    const k = G.chips[0] && G.chips[0].kind;
+    if (k === 'clone') clones++; else if (k === 'laser') lasers++;
+  }
+  const cloneRate = clones / Math.max(1, clones + lasers);
+  check('最大まで強化済みなら約1/3が分身のかけら',
+        clones + lasers === 600 && cloneRate > 0.26 && cloneRate < 0.41,
+        `分身=${clones} レーザー=${lasers} (${(cloneRate * 100).toFixed(0)}%)`);
 
   G.chips.length = 0;
   resetGame(false);
@@ -726,6 +744,65 @@ check('畑が中央帯に収まる',
         G.chips.length === 1 && G.chips[0].y < 0,
         `y=${G.chips[0] && G.chips[0].y}`);
   resetGame(false); G.mode = 'play';
+}
+
+// --- 分身（かけらを受け止めると数秒だけ並んで戦う） ---
+{
+  resetGame(true); G.mode = 'play';
+  const p = G.players[0];
+  const rc = zoneRect(true);
+  p.x = p.tx = rc.x0 + (rc.x1 - rc.x0) * 0.25;    // 枠の左寄り・下寄りに立たせる
+  p.y = p.ty = rc.y0 + (rc.y1 - rc.y0) * 0.25;
+  p.firing = false; p.pointer = -1; p.cool = 99;
+
+  G.chips.length = 0; G.bullets.length = 0;
+  G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: true, kind: 'clone' });
+  update(1/60);
+  check('分身のかけらを受け止めると分身が出る', G.clones.length === 1,
+        `分身=${G.clones.length}`);
+
+  const cl = G.clones[0];
+  check('分身は本人と逆の位置に出る（点対称）',
+        Math.abs(cl.x - (rc.x0 + rc.x1 - p.x)) < 1 && Math.abs(cl.y - (rc.y0 + rc.y1 - p.y)) < 1,
+        `分身=(${cl.x.toFixed(0)},${cl.y.toFixed(0)}) 本人=(${p.x.toFixed(0)},${p.y.toFixed(0)})`);
+
+  // 本人が右へ動くと分身は左へ動く
+  const cx0 = cl.x;
+  p.x = p.tx = rc.x0 + (rc.x1 - rc.x0) * 0.75;
+  update(1/60);
+  check('本人が右へ動くと分身は左へ動く', cl.x < cx0 - 20,
+        `分身x ${cx0.toFixed(0)} → ${cl.x.toFixed(0)}`);
+
+  // 撃っていない本人の代わりに、分身が扇状ビームを撃つ
+  G.bullets.length = 0;
+  p.cool = 99; p.firing = false;
+  for (let i = 0; i < 30; i++) update(1/60);
+  const shots = G.bullets.filter(b => Math.abs(b.x - cl.x) < 120 && !b.pierce);
+  check('分身が扇状ビームを撃つ', shots.length >= 3 && shots.some(b => b.vx !== 0),
+        `弾=${shots.length}`);
+  check('分身の弾の持ち主は本人', G.bullets.every(b => b.owner === 0));
+
+  // 約5秒で消える
+  let gone = 0;
+  for (let i = 0; i < 60 * 8; i++) {
+    update(1/60); draw();
+    if (!G.clones.length) { gone = i / 60; break; }
+  }
+  check('分身は約5秒で消える', gone > 3.5 && gone < 6.5, `消えるまで=${gone.toFixed(1)}秒`);
+
+  // ゲームオーバーになれば分身も消える
+  G.chips.length = 0;
+  G.chips.push({ x: p.x, y: p.y, vx: 0, vy: 0, side: 0, t: 0, power: true, kind: 'clone' });
+  update(1/60);
+  const spawned = G.clones.length;
+  G.mode = 'play';
+  for (let i = 0; i < 60 * 200 && G.mode === 'play'; i++) { p.cool = 99; update(1/60); }
+  check('ゲームオーバーになると分身も消える',
+        spawned === 1 && G.mode === 'over' && G.clones.length === 0,
+        `mode=${G.mode} 分身=${G.clones.length}`);
+
+  resetGame(false); G.mode = 'play';
+  onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
 }
 
 // --- ひとり用: 爆弾のカケラ（おじゃまむしを倒すと、たまに出る） ---
