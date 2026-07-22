@@ -1471,6 +1471,8 @@ function update(dt) {
           if (dropPowerChip(b.owner, bg.x, bg.y)) {
             burst(bg.x, bg.y, '#ffffff', 16, 220, 5);
           }
+          // ひとり用では、たまに爆弾のカケラも一緒に落ちる
+          if (G.solo && Math.random() < BOMB_CHIP_RATE) dropBombChip(bg.x, bg.y);
           G.bugs.splice(k, 1);
         }
         hitBug = true;
@@ -1555,7 +1557,14 @@ function update(dt) {
       const dx = ch.x - p.x, dy = ch.y - p.y;
       const catchR = ch.power ? 52 : 40;
       if (dx * dx + dy * dy < catchR * catchR) {    // 機体で受け止めた
-        if (ch.power) {
+        if (ch.kind === 'bomb') {                   // 畑のあちこちに爆弾を仕掛ける
+          const n = sowBombBlocks(BOMB_CHIP_BLOCKS);
+          G.score += 50 * n;
+          SFX.powerup();                            // 仕掛けただけなので爆発音は鳴らさない
+          burst(ch.x, ch.y, '#ffb347', 30, 340, 7);
+          burst(ch.x, ch.y, '#ffffff', 16, 240, 5);
+          G.shake = Math.max(G.shake, 12);
+        } else if (ch.power) {
           p.powers++;
           if (ch.kind === 'laser') {
             fireGiantLaser(p);
@@ -1668,6 +1677,53 @@ function dropPowerChip(idx, x, y) {
   });
   SFX.powerDrop();
   return true;
+}
+
+/* ============================================================
+   ひとり用: 爆弾のカケラ
+   おじゃまむしを倒すと、たまにこれも落ちる。受け止めると畑のあちこちが
+   爆弾ブロックに変わるので、そこを撃てば固まった畑をまとめて崩せる。
+============================================================ */
+const BOMB_CHIP_RATE = 0.2;        // おじゃまむしを倒したときに出る確率
+const BOMB_CHIP_BLOCKS = 6;        // 一度に爆弾へ変えるブロックの数
+
+function dropBombChip(x, y) {
+  if (!FIELD.cell) return false;
+  G.chips.push({
+    x, y, vx: rand(-25, 25), vy: 60,
+    side: 0, t: 0, power: true, kind: 'bomb',
+  });
+  SFX.powerDrop();
+  return true;
+}
+
+// 画面に映っているブロックを count 個ぶんランダムに選び、爆弾ブロックへ変える
+function sowBombBlocks(count) {
+  const pool = [];
+  for (let r = 0; r < FIELD.rows; r++) {
+    for (let c = 0; c < FIELD.cols; c++) {
+      const b = FIELD.grid[idxAt(c, r)];
+      // 大きいブロックは4マスで1つの作りなので触らない。スター入りも避ける
+      if (!b || b.mega || b.slave || b.star || b.type === B_BOMB) continue;
+      const y = cellCenter(c, r).y;
+      if (y < 0 || y > H) continue;                  // 画面の外は変えない
+      pool.push({ c, r, b });
+    }
+  }
+  let made = 0;
+  while (made < count && pool.length) {
+    const k = Math.floor(rand(0, pool.length));
+    const { c, r, b } = pool[k];
+    pool.splice(k, 1);
+    b.type = B_BOMB;
+    b.hp = b.maxHp = BLOCK_HP[B_BOMB];
+    b.cracks = null;                                 // 硬いブロックの亀裂は持ち越さない
+    b.flash = 1;                                     // 変わった瞬間だけ白く光る
+    const pos = cellCenter(c, r);
+    burst(pos.x, pos.y, '#ffb347', 8, 170, 4);
+    made++;
+  }
+  return made;
 }
 
 // 取った瞬間に前方へ撃つ巨大レーザー。
@@ -2288,7 +2344,8 @@ function drawChips() {
     ctx.translate(ch.x, ch.y);
 
     if (ch.power) {                                  // 強化のかけら
-      const col = P_COLORS[ch.side].main;
+      // 爆弾のカケラだけは、機体の色ではなく導火線の色をまとう
+      const col = ch.kind === 'bomb' ? '#ff9a3c' : P_COLORS[ch.side].main;
       const pulse = 0.6 + 0.4 * Math.sin(ch.t * 8);
 
       // --- 後光 ---
@@ -2377,6 +2434,10 @@ function drawChips() {
           ctx.stroke();
         }
         ctx.restore();
+      } else if (ch.kind === 'bomb') {
+        // 爆弾のカケラ：畑の爆弾ブロックと同じ絵柄なので、効き目が一目で分かる
+        ctx.shadowBlur = 0;
+        drawBombIcon(0, 0, 100);
       } else if (ch.kind === 'shot') {
         // 通常攻撃の強化＝広がる3本の矢
         for (const a of [-0.5, 0, 0.5]) {

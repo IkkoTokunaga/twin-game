@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -726,6 +726,82 @@ check('畑が中央帯に収まる',
         G.chips.length === 1 && G.chips[0].y < 0,
         `y=${G.chips[0] && G.chips[0].y}`);
   resetGame(false); G.mode = 'play';
+}
+
+// --- ひとり用: 爆弾のカケラ（おじゃまむしを倒すと、たまに出る） ---
+{
+  // おじゃまむしを1匹ずつ確実に倒して、爆弾のカケラが出た回数を数える
+  const killBugs = (solo, trials) => {
+    resetGame(solo); G.mode = 'play';
+    let bombs = 0, kills = 0;
+    for (let i = 0; i < trials; i++) {
+      G.bugs.length = 0; G.chips.length = 0; G.bullets.length = 0;
+      spawnBug(0);
+      const bg = G.bugs[0];
+      if (!bg) continue;
+      G.bullets.push({ x: bg.x, y: bg.y, vx: 0, vy: 0, r: 40, dmg: 9999, owner: 0 });
+      update(1/60);
+      if (G.bugs.indexOf(bg) < 0) kills++;
+      bombs += G.chips.filter(ch => ch.kind === 'bomb').length;
+    }
+    return { bombs, kills };
+  };
+
+  const solo = killBugs(true, 600);
+  const rate = solo.bombs / Math.max(1, solo.kills);
+  check('ひとり用: おじゃまむしを倒すと爆弾のカケラが約1/5で出る',
+        solo.kills > 500 && rate > 0.13 && rate < 0.28,
+        `出た=${solo.bombs}/${solo.kills} (${(rate * 100).toFixed(0)}%)`);
+
+  const duo = killBugs(false, 200);
+  check('ふたり用では爆弾のカケラは出ない', duo.bombs === 0 && duo.kills > 150,
+        `出た=${duo.bombs}/${duo.kills}`);
+
+  // 受け止めると、画面の中のブロックがまとめて爆弾ブロックに変わる
+  resetGame(true); G.mode = 'play';
+  const p = G.players[0];
+  const bombsIn = () => FIELD.grid.filter(b => b && !b.slave && b.type === B_BOMB).length;
+  const before = bombsIn();
+  G.chips.length = 0;
+  dropBombChip(p.x, p.y);                       // 機体の上に落として即受け止めさせる
+  draw();                                       // 爆弾の絵柄が描けること
+  update(1/60);
+  check('爆弾のカケラを受け止めるとブロックが爆弾に変わる',
+        G.chips.length === 0 && bombsIn() === before + BOMB_CHIP_BLOCKS,
+        `爆弾 ${before} → ${bombsIn()}（+${BOMB_CHIP_BLOCKS}のはず）`);
+
+  // 変わるのは画面に映っているブロックだけ
+  resetGame(true); G.mode = 'play';
+  let offScreen = 0;
+  for (let r = 0; r < FIELD.rows; r++) {
+    for (let c = 0; c < FIELD.cols; c++) {
+      const b = FIELD.grid[idxAt(c, r)];
+      if (!b || b.type === B_BOMB) continue;
+      const y = FIELD.y0 + (r + 0.5) * FIELD.cell + FIELD.scrollY;
+      if (y < 0 || y > 1200) { b.mark = true; offScreen++; }
+    }
+  }
+  sowBombBlocks(999);
+  const leaked = FIELD.grid.filter(b => b && b.mark && b.type === B_BOMB).length;
+  check('画面の外のブロックは爆弾に変わらない', offScreen > 0 && leaked === 0,
+        `画面外=${offScreen} 変わった=${leaked}`);
+
+  // 大きいブロックは4マスで1つの作りなので触らない
+  resetGame(true); G.mode = 'play';
+  G.survT = 200;
+  for (let i = 0; i < 60 && FIELD.grid.filter(b => b && b.mega).length < 3; i++) commitSurvivalRow();
+  const megaBefore = FIELD.grid.filter(b => b && b.mega).length;
+  const slaveBefore = FIELD.grid.filter(b => b && b.slave).length;
+  sowBombBlocks(999);
+  check('大きいブロックは爆弾に変わらない',
+        megaBefore >= 3 &&
+        FIELD.grid.filter(b => b && b.mega).length === megaBefore &&
+        FIELD.grid.filter(b => b && b.slave).length === slaveBefore &&
+        FIELD.grid.filter(b => b && (b.mega || b.slave) && b.type === B_BOMB).length === 0,
+        `大ブロック=${megaBefore} 子=${slaveBefore}`);
+
+  resetGame(false); G.mode = 'play';
+  onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
 }
 
 // --- 通常攻撃は扇状 ---
