@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE,addShake,SHAKE_MAX,SHAKE_SCALE};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE,addShake,SHAKE_MAX,SHAKE_SCALE}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -963,6 +963,27 @@ check('畑が中央帯に収まる',
   for (let i = 0; i < 60; i++) update(1/60);
   check('衝撃波は後片付けされる', G.blasts.length === 0, `blasts=${G.blasts.length}`);
   check('閃光も消える', G.flash === 0, `flash=${G.flash}`);
+  makeField(G.stage);
+}
+
+// --- 画面の揺れは控えめ（子どもが見ていて辛くならない範囲） ---
+{
+  // 撃っていない＝新しい揺れが割りこまないひとり用で測る
+  resetGame(true); G.mode = 'play';
+  G.shake = 0;
+  explode(G.players[0].x, Z.bot.y0 - 20);        // いちばん強く揺れる出来事
+  check('いちばん強い揺れでも上限を超えない', G.shake <= SHAKE_MAX + 1e-6,
+        `揺れ=${G.shake.toFixed(1)}px 上限=${SHAKE_MAX}px`);
+  addShake(999);                                 // 重ねてもそれ以上にはならない
+  check('揺れは重ねても上限で頭打ち', G.shake <= SHAKE_MAX + 1e-6, `揺れ=${G.shake.toFixed(1)}px`);
+  let t = 0;
+  for (let i = 0; i < 60 * 3; i++) { update(1/60); t = (i + 1) / 60; if (G.shake <= 0.3) break; }
+  check('揺れは1秒ほどで収まる', G.shake <= 0.3 && t < 1.0,
+        `${t.toFixed(2)}秒後に ${G.shake.toFixed(2)}px`);
+
+  // ふたり用に戻す（以降のテストは2機がいる前提）
+  resetGame(false); G.mode = 'play';
+  onDown(ev(1, 400, 1000)); onDown(ev(2, 400, 200));
   makeField(G.stage);
 }
 
