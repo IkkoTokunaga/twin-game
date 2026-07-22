@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt,onKey,dropPowerChip,commitSurvivalRow,soloStage,megaTypesFor,SOLO_STEP,dropBombChip,sowBombBlocks,BOMB_CHIP_BLOCKS,BOMB_CHIP_RATE,GIANT_CHARGE}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -420,10 +420,19 @@ check('畑が中央帯に収まる',
     return n;
   };
 
+  // ためが終わるまで進める（発射は次のフレームでも起きるよう少し余分に回す）
+  const waitCharge = () => {
+    for (let i = 0; i < 60 && p.laserT > 0; i++) { draw(); update(1/60); }
+  };
+
   setupLane();
   const beforeAll = FIELD.grid.filter(Boolean).length;
   put(true, 'laser');
-  check('球を取ると巨大レーザーが出る', G.bullets.some(b => b.giant), `弾=${G.bullets.length}`);
+  check('球を取っても、ためている間はまだ出ない',
+        p.laserT > 0 && !G.bullets.some(b => b.giant),
+        `ため=${p.laserT.toFixed(2)}秒 弾=${G.bullets.length}`);
+  waitCharge();
+  check('ためが終わると巨大レーザーが出る', G.bullets.some(b => b.giant), `弾=${G.bullets.length}`);
   const shot = G.bullets.find(b => b.giant);
   check('威力は最大まで強化したビームと同じ', shot.dmg === BEAM_LEVELS[BEAM_LEVELS.length - 1].dmg,
         `威力=${shot.dmg}`);
@@ -445,9 +454,24 @@ check('畑が中央帯に収まる',
   check('畑全体は消えない', afterAll > 0, `残=${afterAll} / ${beforeAll}`);
   console.log(`  参考: 巨大レーザーで${beforeAll - afterAll}個消滅（畑${beforeAll}個中）`);
 
+  // ためている間に動かすと、その場所から出る（狙いを少しずらせる）
+  setupLane();
+  put(true, 'laser');
+  const aimX = p.x + FIELD.cell * 2;
+  p.x = p.tx = aimX;                             // ため中に横へずらす
+  waitCharge();
+  const moved = G.bullets.find(b => b.giant);
+  check('ため中に動かすと発射地点もずれる',
+        !!moved && Math.abs(moved.x - aimX) < 1,
+        `発射x=${moved && moved.x.toFixed(0)} ねらい=${aimX.toFixed(0)}`);
+  check('ためは一瞬（0.2〜1.0秒）', GIANT_CHARGE >= 0.2 && GIANT_CHARGE <= 1.0,
+        `ため=${GIANT_CHARGE}秒`);
+  G.bullets.length = 0;
+
   // 色つきブロックは巨大レーザーも止める
   setupLane(FIELD.rows - 3);
   put(true, 'laser');
+  waitCharge();
   for (let i = 0; i < 90; i++) update(1/60);
   const col = Math.floor(FIELD.cols / 2);
   const blocker = FIELD.grid[idxAt(col, FIELD.rows - 3)];

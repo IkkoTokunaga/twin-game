@@ -321,6 +321,10 @@ const SFX = {
     [784, 587, 440].forEach((f, i) =>
       tone({ f, type:'square', dur:0.22, vol:0.15, delay:i * 0.09 }));
   },
+  giantCharge() {                                // 巨大レーザーのため（発射の直前まで）
+    tone({ f:120, f2:1000, type:'sawtooth', dur:0.45, vol:0.13 });
+    noiseBurst({ f:300, f2:4000, dur:0.45, vol:0.10, filter:'bandpass' });
+  },
   giantLaser() {                                 // 巨大レーザー
     tone({ f:90, f2:1400, type:'sawtooth', dur:0.7, vol:0.28 });
     tone({ f:180, f2:60, type:'square', dur:0.9, vol:0.2, delay:0.05 });
@@ -495,6 +499,7 @@ function makePlayer(idx) {
     dug: 0,                              // 掘ったブロック数
     stars: 0,                            // 見つけたスターの数
     cool: 0,
+    laserT: 0,                           // 巨大レーザーの溜め残り時間（0で発射）
     stun: 0,                             // おじゃまむしに触れると少しの間うごけない
     outside: false,                      // 指が画面の外にある間は停止する
     caught: 0,                           // 拾ったかけらの数
@@ -1405,6 +1410,12 @@ function update(dt) {
     p.stun = Math.max(0, p.stun - dt);
     p.cool -= dt;
     if (p.firing && p.stun <= 0 && p.cool <= 0) playerShoot(p);
+
+    // ためが終わったところで、その時いる場所から巨大レーザーが出る
+    if (p.laserT > 0) {
+      p.laserT -= dt;
+      if (p.laserT <= 0) { p.laserT = 0; fireGiantLaser(p); }
+    }
   }
 
   updateClones(dt);
@@ -1572,7 +1583,7 @@ function update(dt) {
         } else if (ch.power) {
           p.powers++;
           if (ch.kind === 'laser') {
-            fireGiantLaser(p);
+            chargeGiantLaser(p);
           } else if (ch.kind === 'clone') {
             spawnClone(p);
           } else if (ch.kind === 'shot') {
@@ -1804,7 +1815,16 @@ function cloneShoot(cl) {
   cl.cool = sl.cool;
 }
 
-// 取った瞬間に前方へ撃つ巨大レーザー。
+/* 巨大レーザーは球を取った瞬間ではなく、一瞬ためてから前方へ撃つ。
+   ためている間もふつうに動けるので、撃つ場所を少しだけずらして狙える。 */
+const GIANT_CHARGE = 0.45;               // ためている時間（秒）
+
+function chargeGiantLaser(p) {
+  p.laserT = GIANT_CHARGE;
+  SFX.giantCharge();
+  G.shake = Math.max(G.shake, 6);
+}
+
 // 威力は最大まで強化したビームと同じで、色つきブロック以外は貫通していく。
 function fireGiantLaser(p) {
   const top = BEAM_LEVELS[BEAM_LEVELS.length - 1];
@@ -1909,6 +1929,7 @@ function draw() {
     drawGems();
     drawBlasts();
     for (const b of G.bullets) drawBullet(b);
+    for (const p of G.players) drawLaserCharge(p);
     for (const p of G.players) drawShip(p);
     drawClones();
     drawParts();
@@ -2003,6 +2024,48 @@ function roundRect(c, x, y, w, h, r) {
   c.arcTo(x, y + h, x, y, r);
   c.arcTo(x, y, x + w, y, r);
   c.closePath();
+}
+
+// 巨大レーザーのため。撃つ向きに予告の帯を出し、光が砲口へ集まっていく。
+// 帯を見ながら機体を動かせば、当てたい列へ寄せられる。
+function drawLaserCharge(p) {
+  if (p.laserT <= 0) return;
+  const k = 1 - p.laserT / GIANT_CHARGE;            // 0→1 でたまる
+  const my = p.y + p.dirY * 20 * SHIP.scale;
+  const c = P_COLORS[p.idx];
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // 進路の予告帯（本番の太さ 60*2 に向かって広がる）
+  const w = 30 + k * 90;
+  ctx.globalAlpha = 0.08 + 0.16 * k;
+  ctx.fillStyle = c.main;
+  if (p.dirY < 0) ctx.fillRect(p.x - w / 2, 0, w, my);
+  else            ctx.fillRect(p.x - w / 2, my, w, H - my);
+
+  // 砲口に集まる光
+  ctx.globalAlpha = 1;
+  const r = 12 + k * 34;
+  const g = ctx.createRadialGradient(p.x, my, 0, p.x, my, r);
+  g.addColorStop(0,    `rgba(255,255,255,${0.45 + 0.55 * k})`);
+  g.addColorStop(0.35, c.main);
+  g.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(p.x, my, r, 0, TAU); ctx.fill();
+
+  // 吸い込まれていく光の筋
+  ctx.globalAlpha = 0.35 + 0.5 * k;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) {
+    const a = G.t * 7 + i * TAU / 6;
+    const r1 = 76 - k * 48, r0 = r1 - 18;
+    ctx.beginPath();
+    ctx.moveTo(p.x + Math.cos(a) * r1, my + Math.sin(a) * r1);
+    ctx.lineTo(p.x + Math.cos(a) * r0, my + Math.sin(a) * r0);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // 機体のシルエット（原点が中心・機首が -y 向き）。
