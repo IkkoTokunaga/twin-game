@@ -20,8 +20,8 @@ global.window={innerWidth:800,innerHeight:1200,devicePixelRatio:2,addEventListen
   visualViewport:null,AudioContext:null,webkitAudioContext:null};
 global.screen={}; global.performance={now:()=>Date.now()}; global.requestAnimationFrame=noop; global.setTimeout=noop;
 
-const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug};')();
-const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug}=api;
+const api=new Function(src+'\n;return {onDown,onMove,onUp,update,draw,G,FIELD,Z,blockAt,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt};')();
+const {onDown,onMove,onUp,update,draw,G,FIELD,Z,playerShoot,idxAt,makeField,damageBlock,B_LOCK0,B_LOCK1,explode,BLAST_STUN,B_BOMB,MENU,resetGame,makePlayer,collectGem,CHIPS_PER_POWER,BEAM_LEVELS,SHOT_LEVELS,zoneRect,B_BRICK,B_ROCK,B_DIAMOND,BLOCK_HP,BLOCK_DEBUT,spawnBug,MEGA_HP,MEGA_DEBUT,blockAt}=api;
 const ev=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,preventDefault:noop});
 
 // 残っているブロックを狙う簡易ボット。画面を等速で往復するだけだと
@@ -173,6 +173,52 @@ check('畑が中央帯に収まる',
   check('ダイヤも通常ショットで壊せる', FIELD.grid[idxAt(0, 0)] === null,
         `${hits}発`);
   console.log(`  参考: ダイヤは通常ショット${hits}発ぶん`);
+  makeField(G.stage);
+}
+
+// --- 4マスをまとめた大きいブロック ---
+{
+  // 登場前のステージには出ない
+  let before = 0;
+  for (let i = 0; i < 40; i++) { makeField(MEGA_DEBUT - 1); before += FIELD.grid.filter(b => b && b.mega).length; }
+  check(`大きいブロックはステージ${MEGA_DEBUT - 1}までは出ない`, before === 0, `見つかった数=${before}`);
+
+  // 登場後は現れ、親1つにつき子は必ず3つ（2×2）
+  let anchors = 0, slaves = 0;
+  for (let i = 0; i < 40; i++) {
+    makeField(MEGA_DEBUT + 2);
+    anchors += FIELD.grid.filter(b => b && b.mega).length;
+    slaves  += FIELD.grid.filter(b => b && b.slave).length;
+  }
+  check(`大きいブロックはステージ${MEGA_DEBUT}から出る`, anchors > 0, `見つかった数=${anchors}`);
+  check('大きいブロックは親1に子3（2×2）', slaves === anchors * 3, `親=${anchors} 子=${slaves}`);
+
+  // 1マスぶんより耐久が高い
+  check('大きいブロックは1マスより硬い',
+        MEGA_HP[B_BRICK] > BLOCK_HP[B_BRICK] && MEGA_HP[B_ROCK] > BLOCK_HP[B_ROCK] &&
+        MEGA_HP[B_DIAMOND] > BLOCK_HP[B_DIAMOND],
+        `${MEGA_HP[B_BRICK]}/${MEGA_HP[B_ROCK]}/${MEGA_HP[B_DIAMOND]}`);
+
+  // 子マスを撃つと4マスまとめて壊れる
+  let found = null;
+  for (let tries = 0; tries < 30 && !found; tries++) {
+    makeField(MEGA_DEBUT + 5);
+    for (let r = 0; r < FIELD.rows && !found; r++)
+      for (let c = 0; c < FIELD.cols && !found; c++) {
+        const b = FIELD.grid[idxAt(c, r)];
+        if (b && b.mega) found = { c, r };
+      }
+  }
+  if (found) {
+    const { c, r } = found;
+    let hits = 0;
+    while (blockAt(c + 1, r + 1) && hits < 500) { damageBlock(c + 1, r + 1, 20, 0); hits++; }
+    const cleared = [idxAt(c, r), idxAt(c + 1, r), idxAt(c, r + 1), idxAt(c + 1, r + 1)]
+      .every(i => FIELD.grid[i] === null);
+    check('子マスを撃つと4マスまとめて壊れる', cleared, `${hits}発で clear=${cleared}`);
+  } else {
+    check('子マスを撃つと4マスまとめて壊れる', false, '大きいブロックが見つからなかった');
+  }
   makeField(G.stage);
 }
 

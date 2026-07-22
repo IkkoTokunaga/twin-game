@@ -573,6 +573,11 @@ const BLOCK_HP = {
 const BLOCK_NAME = { [B_BRICK]:'レンガ', [B_ROCK]:'いわ', [B_DIAMOND]:'ダイヤ' };
 // 硬いブロックが初めて出るステージ
 const BLOCK_DEBUT = { [B_BRICK]: 2, [B_ROCK]: 4, [B_DIAMOND]: 7 };
+
+// 4マスをまとめた大きい正方形ブロック。ステージ10から登場する。
+// 1マスぶんより耐久が高く、掘り応えがある
+const MEGA_DEBUT = 10;
+const MEGA_HP = { [B_BRICK]: 150, [B_ROCK]: 330, [B_DIAMOND]: 700 };
 const FIELD = { x0:0, y0:0, cell:0, cols:0, rows:0, grid:[] };
 
 function idxAt(c, r) { return r * FIELD.cols + c; }
@@ -627,12 +632,16 @@ function makeField(stage) {
     FIELD.grid[i] = { type, hp, maxHp: hp, star: false, flash: 0 };
   }
 
+  // ステージが進むと、4マスをまとめた大きいブロックを混ぜる
+  if (stage >= MEGA_DEBUT) placeMegaBlocks(stage);
+
   // スターを重複なく隠す。上下の端の列は序盤で当たりやすいので避ける
   const pool = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const b = FIELD.grid[idxAt(c, r)];
-      if (b.type !== B_BOMB) pool.push(idxAt(c, r));
+      // 大きいブロックの中にはスターを隠さない（取り出しに手間がかかりすぎる）
+      if (b.type !== B_BOMB && !b.mega && !b.slave) pool.push(idxAt(c, r));
     }
   }
   // 畑が広いひとり用は、その広さに見合うだけスターを増やす
@@ -673,10 +682,54 @@ function ensureReachable() {
   }
 }
 
+/* ============================================================
+   大きいブロック（2×2）
+   4マスをまとめて1つの正方形にする。左上を「親」として耐久を持ち、
+   残る3マスは親を指す「子」にする。どのマスに当たっても親が削れ、
+   壊れると4マスまとめて消える。
+============================================================ */
+// 2×2 がその位置に収まり、まだ大きいブロックと重なっていないか
+function megaFits(c, r) {
+  if (c + 1 >= FIELD.cols || r + 1 >= FIELD.rows) return false;
+  for (let dc = 0; dc <= 1; dc++) for (let dr = 0; dr <= 1; dr++) {
+    const b = FIELD.grid[idxAt(c + dc, r + dr)];
+    if (!b || b.mega || b.slave) return false;
+  }
+  return true;
+}
+
+// (c,r) を左上に、指定の種類の大きいブロックを敷く
+function setMega(c, r, type) {
+  const hp = MEGA_HP[type];
+  FIELD.grid[idxAt(c, r)] = { type, hp, maxHp: hp, star: false, flash: 0, mega: true };
+  for (let dc = 0; dc <= 1; dc++) for (let dr = 0; dr <= 1; dr++) {
+    if (!dc && !dr) continue;                 // 親はそのまま
+    FIELD.grid[idxAt(c + dc, r + dr)] = { slave: true, mc: c, mr: r, type };
+  }
+}
+
+function placeMegaBlocks(stage) {
+  const cols = FIELD.cols, rows = FIELD.rows;
+  // ステージが進むほど数を増やす。畑の広さで頭打ち
+  const want = Math.min(2 + Math.floor((stage - MEGA_DEBUT) / 3), Math.floor(cols * rows / 12));
+  const types = [B_BRICK, B_ROCK, B_DIAMOND];
+  let made = 0, tries = 0;
+  while (made < want && tries < 80) {
+    tries++;
+    const c = Math.floor(rand(0, cols - 1));   // 2×2 が収まる左上
+    const r = Math.floor(rand(0, rows - 1));
+    if (!megaFits(c, r)) continue;
+    setMega(c, r, types[Math.floor(rand(0, types.length))]);
+    made++;
+  }
+}
+
 // ブロックを壊す。スター入りならスターを出し、ばくだんなら周囲を巻き込む
 function breakBlock(c, r, ownerIdx, depth, noBomb) {
   const b = blockAt(c, r);
   if (!b) return;
+  if (b.slave) { breakBlock(b.mc, b.mr, ownerIdx, depth, noBomb); return; }
+  if (b.mega)  { breakMega(c, r, ownerIdx); return; }
   FIELD.grid[idxAt(c, r)] = null;
   const pos = cellCenter(c, r);
   G.score += 10;
@@ -689,6 +742,7 @@ function breakBlock(c, r, ownerIdx, depth, noBomb) {
         if (!dc && !dr) continue;
         const n = blockAt(c + dc, r + dr);
         if (!n || lockOwner(n.type) >= 0) continue;   // 色つきは爆発でも壊れない
+        if (n.mega || n.slave) continue;              // 大きいブロックは爆風では壊れない
         breakBlock(c + dc, r + dr, ownerIdx, (depth || 0) + 1);
       }
     }
@@ -725,6 +779,33 @@ function breakBlock(c, r, ownerIdx, depth, noBomb) {
     }
     if (near) { burst(pos.x, pos.y, '#ffd54a', 7, 90, 3); SFX.near(); }
   }
+}
+
+// 大きいブロックを壊す。4マスをまとめて消し、派手に砕く
+function breakMega(mc, mr, ownerIdx) {
+  const b = blockAt(mc, mr);
+  if (!b) return;
+  const cell = FIELD.cell;
+  const cx = FIELD.x0 + (mc + 1) * cell;      // 2×2 の中心
+  const cy = FIELD.y0 + (mr + 1) * cell;
+  for (let dc = 0; dc <= 1; dc++) for (let dr = 0; dr <= 1; dr++) {
+    FIELD.grid[idxAt(mc + dc, mr + dr)] = null;
+  }
+  G.score += 60;
+  if (ownerIdx >= 0 && G.players[ownerIdx]) G.players[ownerIdx].dug += 4;
+  SFX.blockBreak();
+  const pal = BLOCK_COLORS[b.type] || BLOCK_COLORS[B_NORMAL];
+  burst(cx, cy, pal.edge, 34, 360, 9);
+  burst(cx, cy, '#ffffff', 12, 220, 5);
+  G.shake = Math.max(G.shake, 12);
+  // 掘り応えのごほうびに、かけらを必ず落とす
+  const side = ownerIdx === 1 ? 1 : 0;
+  G.chips.push({
+    x: cx, y: cy,
+    vx: rand(-40, 40),
+    vy: (side === 0 ? 1 : -1) * rand(90, 150),
+    side, t: 0,
+  });
 }
 
 // 戻り値: 'none' 当たらなかった / 'blocked' 色違いで弾かれた / 'hit' 削れた
@@ -772,7 +853,13 @@ function explode(x, y) {
 }
 
 function damageBlock(c, r, dmg, ownerIdx, noBomb) {
-  const b = blockAt(c, r);
+  const hit = blockAt(c, r);
+  if (!hit) return 'none';
+
+  // 大きいブロックはどのマスに当たっても親（左上）の耐久を削る
+  const bc = hit.slave ? hit.mc : c;
+  const br = hit.slave ? hit.mr : r;
+  const b = blockAt(bc, br);
   if (!b) return 'none';
 
   const owner = lockOwner(b.type);
@@ -786,7 +873,7 @@ function damageBlock(c, r, dmg, ownerIdx, noBomb) {
 
   b.hp -= dmg;
   b.flash = 1;
-  if (b.hp <= 0) breakBlock(c, r, ownerIdx, 0, noBomb);
+  if (b.hp <= 0) breakBlock(bc, br, ownerIdx, 0, noBomb);
   else SFX.blockHit();
   return 'hit';
 }
@@ -1647,10 +1734,11 @@ function drawField() {
   for (let r = 0; r < FIELD.rows; r++) {
     for (let c = 0; c < FIELD.cols; c++) {
       const b = FIELD.grid[idxAt(c, r)];
-      if (!b) continue;
+      if (!b || b.slave) continue;             // 子マスは親がまとめて描く
+      const span = b.mega ? 2 : 1;             // 大きいブロックは2マスぶん
       const x = FIELD.x0 + c * cell, y = FIELD.y0 + r * cell;
       const pad = cell * 0.055;
-      const w = cell - pad * 2;
+      const w = cell * span - pad * 2;
       const wear = b.hp / b.maxHp;             // 削れるほど暗く小さくなる
 
       const pal = BLOCK_COLORS[b.type] || BLOCK_COLORS[B_NORMAL];
@@ -1666,7 +1754,7 @@ function drawField() {
 
       ctx.globalAlpha = (0.5 + 0.5 * wear) * 0.9;
       ctx.strokeStyle = edge;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = b.mega ? 3 : 2;
       roundRect(ctx, x + pad, y + pad, w, w, cell * 0.16);
       ctx.stroke();
 
