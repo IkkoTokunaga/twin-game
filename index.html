@@ -509,7 +509,15 @@ function makePlayer(idx) {
 function zoneRect(bottom) {
   const z = bottom ? Z.bot : Z.top;
   const m = 20 * SHIP.scale;             // 機体が画面端からはみ出さない余白
-  return { x0: m, y0: z.y0, x1: W - m, y1: z.y1 };
+  // 横は畑（12列）に合わせ、端の列の中心まで届く範囲にする。
+  // 畑より外の空きスペースへは行けない（＝どの列も必ず狙える）。
+  let x0 = m, x1 = W - m;
+  if (FIELD.cell) {
+    const half = FIELD.cell / 2;
+    x0 = clamp(FIELD.x0 + half, m, W - m);
+    x1 = clamp(FIELD.x0 + FIELD.cols * FIELD.cell - half, m, W - m);
+  }
+  return { x0, y0: z.y0, x1, y1: z.y1 };
 }
 
 function clampPlayer(p) {
